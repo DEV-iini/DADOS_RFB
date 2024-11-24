@@ -20,7 +20,7 @@ import wget
 def getEnv(env):
     return os.getenv(env)
 
-print('Especifique o local do seu arquivo de configuração ".env". Por exemplo: C:\...\Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ\code')
+# print('Especifique o local do seu arquivo de configuração ".env". Por exemplo: C:\...\Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ\code')
 # C:\Aphonso_C\Git\Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ\code
 local_env = 'D:\\Repositorio\\00_Programação\\06 - DADOS_RFB\\DADOS_RFB\\code'
 dotenv_path = os.path.join(local_env, '.env')
@@ -38,15 +38,18 @@ try:
     # Conectar:
     conn = psycopg2.connect('dbname='+database+' '+'user='+user+' '+'host='+host+' '+'port='+port+' '+'password='+passw)
     cur = conn.cursor()
-    cur.execute("select * from empresa")
-
+    num = 0
+    cur.execute("select ES.cnpj_basico FROM estabelecimento ES INNER JOIN empresa EM on ES.cnpj_basico=EM.cnpj_basico INNER JOIN munic MU on MU.codigo=ES.municipio WHERE (ES.nome_fantasia LIKE '%Condomínio%' or ES.nome_fantasia LIKE '%Edificio%' or ES.nome_fantasia LIKE '%Residencial%') AND MU.descricao = 'OSASCO' AND ES.cep LIKE '%06122%'")
+    #, ES.cnpj_ordem, ES.cnpj_dv, EM.razao_social, ES.nome_fantasia, EM.porte_empresa, ES.situacao_cadastral, ES.tipo_logradouro, ES.logradouro, ES.numero, ES.complemento, ES.bairro, ES.cep, ES.uf, MU.descricao, ES.ddd_1, ES.telefone_1, ES.ddd_2, ES.telefone_2, ES.correio_eletronico, ES.situacao_especial
     resultado = cur.fetchall()
-
+    
     for res in resultado:
+        num = num + 1
         print(res)
 except (Exception, psycopg2.DatabaseError) as error:
     print(error)
 finally:
+    print(num)
     conn.close()
     
 # empresa.columns = ['cnpj_basico', 
@@ -130,5 +133,4 @@ finally:
 #estabelecimento.situacao_especial',
 
 
-#select estabelecimento.cnpj_basico, estabelecimento.cnpj_ordem, estabelecimento.cnpj_dv, empresa.razao_social, estabelecimento.nome_fantasia, empresa.porte_empresa, estabelecimento.situacao_cadastral, estabelecimento.tipo_logradouro, estabelecimento.logradouro, estabelecimento.numero, estabelecimento.complemento, estabelecimento.bairro, estabelecimento.cep, estabelecimento.uf, estabelecimento.municipio, estabelecimento.ddd_1, estabelecimento.telefone_1, estabelecimento.ddd_2, estabelecimento.telefone_2, estabelecimento.correio_eletronico, estabelecimento.situacao_especial from estabelecimento [inner] join empresa on estabelecimento.cnpj_basico=empresa.cnpj_basico
-#where estabelecimento.nome_fantasia = '%Condomínio%' or '%Edificio%' or '%Residencial%'
+
