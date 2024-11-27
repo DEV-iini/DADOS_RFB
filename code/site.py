@@ -1,8 +1,9 @@
 import http.server
 import socketserver
+import os
 
 # Caminho dos arquivos
-DIRECTORY = "D:/OPERACAO/INPUT_FILES" 
+DIRECTORY = os.path.abspath("D:/OPERACAO/INPUT_FILES")
 
 # Arquivos no site
 Handler = http.server.SimpleHTTPRequestHandler
