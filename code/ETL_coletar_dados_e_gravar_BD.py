@@ -159,7 +159,7 @@ for l in Files:
     i_l += 1
     print('Baixando arquivo:')
     print(str(i_l) + ' - ' + l)
-    url = dados_rf+l  # type: ignore
+    url = dados_rf+'/'+l  # type: ignore
     file_name = os.path.join(output_files, l)
     if check_diff(url, file_name):
         wget.download(url, out=output_files, bar=bar_progress)
