@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import dateo
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -243,7 +243,7 @@ mydb = mysql.connector.connect(
 engine = create_engine(f'mysql+mysqlconnector://{getEnv('DB_USER')}:{
                        getEnv('DB_PASSWORD')}@{getEnv('DB_HOST')}/{getEnv('DB_NAME')}')
 conn = mydb.connect('dbname=' + getEnv('DB_NAME') + ' '+'user=' + getEnv('DB_USER') +
-                    ' '+'host=' + getEnv('DB_HOST') + ' ' + 'port=' + getEnv('DB_PORT') + ' '+'password='+getEnv('DB_PASSWORD'))
+                    ' '+'host=' + getEnv('DB_HOST') + ' ' + 'port=' + getEnv('DB_PORT') + ' '  +'password=' + getEnv('DB_PASSWORD'))
 cur = conn.cursor()
 
 # %%
