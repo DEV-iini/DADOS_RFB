@@ -99,7 +99,7 @@ try:
 except:
     pass
     print('Erro na definição dos diretórios, verifique o arquivo ".env" ou o local informado do seu arquivo de configuração.')
-print('Linha 102 :'+ dados_rf)
+
 # %%
 raw_html = urllib.request.urlopen(dados_rf)
 raw_html = raw_html.read()
@@ -233,27 +233,17 @@ for i in range(len(Items)):
 # %%
 # Conectar no banco de dados:
 # Dados da conexão com o BD
-print(getEnv('DB_HOST'))
-print(getEnv('DB_USER'))
-print(getEnv('DB_PASSWORD'))
-print(getEnv('DB_NAME'))
-print(getEnv('DB_PORT'))
-
 mydb = mysql.connector.connect(
     host=getEnv('DB_HOST'),
     user=getEnv('DB_USER'),
-    password=getEnv('DB_PASSWORD'),
-    database=getEnv('DB_NAME'),
-    port=getEnv('DB_PORT'),
-    charset="utf8mb4"
+    password=getEnv('DB_PASSWORD')
 )
 
-# Conectar:
-
-engine = create_engine(
-    f'mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}')
-conn = mydb.connect('dbname='+database+' '+'user='+user +
-                    ' '+'host='+host+' '+'port='+port+' '+'password='+password)
+# Conectar
+engine = create_engine(f'mysql+mysqlconnector://{getEnv('DB_USER')}:{
+                       getEnv('DB_PASSWORD')}@{getEnv('DB_HOST')}/{getEnv('DB_NAME')}')
+conn = mydb.connect('dbname=' + getEnv('DB_NAME') + ' '+'user=' + getEnv('DB_USER') +
+                    ' '+'host=' + getEnv('DB_HOST') + ' ' + 'port=' + getEnv('DB_PORT') + ' '+'password='+getEnv('DB_PASSWORD'))
 cur = conn.cursor()
 
 # %%
