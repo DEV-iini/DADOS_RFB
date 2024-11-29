@@ -17,6 +17,11 @@ import zipfile
 import mysql.connector
 import lxml
 import urllib.parse
+import logging
+
+# Gerar Log
+logging.basicConfig(filename='DADOS_RFB.log', level=logging.INFO)
+logging.info('Iniciando o processo de carga')
 
 
 def check_diff(url, file_name):
@@ -82,6 +87,7 @@ load_dotenv(dotenv_path=dotenv_path)
 
 dados_rf = 'http://localhost:8000'
 
+logging.info('Acesso ao site')
 # %%
 # Read details from ".env" file:
 output_files = None
@@ -233,18 +239,25 @@ for i in range(len(Items)):
 # %%
 # Conectar no banco de dados:
 # Dados da conexão com o BD
-mydb = mysql.connector.connect(
-    host=getEnv('DB_HOST'),
-    user=getEnv('DB_USER'),
-    password=getEnv('DB_PASSWORD')
-)
+logging.info('Acesso Banco de dados')
 
-# Conectar
-engine = create_engine(f'mysql+mysqlconnector://{getEnv('DB_USER')}:{
-                       getEnv('DB_PASSWORD')}@{getEnv('DB_HOST')}/{getEnv('DB_NAME')}')
-conn = mydb.connect('dbname=' + getEnv('DB_NAME') + ' '+'user=' + getEnv('DB_USER') +
-                    ' '+'host=' + getEnv('DB_HOST') + ' ' + 'port=' + getEnv('DB_PORT') + ' '+'password='+getEnv('DB_PASSWORD'))
-cur = conn.cursor()
+try:
+    mydb = mysql.connector.connect(
+        host=getEnv('DB_HOST'),
+        user=getEnv('DB_USER'),
+        password=getEnv('DB_PASSWORD'),
+        database=getEnv('DB_NAME')
+    )
+
+    # Conectar
+    engine = create_engine(f'mysql+mysqlconnector://{getEnv('DB_USER')}:{getEnv('DB_PASSWORD')}@{getEnv('DB_HOST')}/{getEnv('DB_NAME')}, pool_recycle={getEnv('DB_PORT')}')
+    conn = mydb.connect('dbname=' + getEnv('DB_NAME') + ' '+'user=' + getEnv('DB_USER') +
+                    ' '+'host=' + getEnv('DB_HOST') + ' ' + 'port=' + getEnv('DB_PORT') + ' '+'password='+ getEnv('DB_PASSWORD'))
+    cur = conn.cursor()
+except mysql.connector.Error as err:
+    print(f"Erro ao conectar ao banco de dados")
+    logging.info('Erro ao conectar ao banco de dados: {err}')
+
 
 # %%
 # Arquivos de empresa:
