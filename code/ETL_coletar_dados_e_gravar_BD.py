@@ -1,6 +1,7 @@
-from datetime import dateo
+from datetime import date
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+import mysql.connector
 from sqlalchemy.ext.declarative import declarative_base
 import bs4 as bs
 import ftplib
@@ -14,7 +15,6 @@ import requests
 import urllib.request
 import wget
 import zipfile
-import mysql.connector
 import lxml
 import urllib.parse
 import logging
@@ -246,8 +246,11 @@ try:
         host=getEnv('DB_HOST'),
         user=getEnv('DB_USER'),
         password=getEnv('DB_PASSWORD'),
-        database=getEnv('DB_NAME')
+        database=getEnv('DB_NAME'),
+        port=getEnv('DB_PORT')
     )
+
+    engine = mydb.cursor()
 
     # Conectar
     engine = create_engine(f'mysql+mysqlconnector://{getEnv('DB_USER')}:{getEnv('DB_PASSWORD')}@{getEnv('DB_HOST')}/{getEnv('DB_NAME')}, pool_recycle={getEnv('DB_PORT')}')
@@ -257,6 +260,7 @@ try:
 except mysql.connector.Error as err:
     print(f"Erro ao conectar ao banco de dados")
     logging.info('Erro ao conectar ao banco de dados: {err}')
+    pass
 
 
 # %%
