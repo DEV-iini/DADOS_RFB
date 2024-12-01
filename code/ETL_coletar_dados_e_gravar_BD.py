@@ -239,11 +239,22 @@ for i in range(len(Items)):
 # %%
 # Conectar no banco de dados:
 # Dados da conexão com o BD
-logging.info('Acesso Banco de dados')
+logging.info(' Acesso Banco de dados')
+db_host = os.getenv('DB_HOST').strip()
+db_name = os.getenv('DB_NAME').strip()
+db_user = os.getenv('DB_USER').strip()
+db_pass = os.getenv('DB_PASSWORD').strip()
 
-con = mysql.connector.connect(host=getEnv('DB_HOST'),database=getEnv('DB_NAME'), user=getEnv('DB_USER'))
 
-if conn.is_connected():
+con = mysql.connector.connect(
+    host=db_host, 
+    database=db_name, 
+    user=db_user,
+    password=db_pass
+)
+
+if con.is_connected():
+    logging.info(' Banco de dados conectado')
 
 try:
     #mydb = mysql.connector.connect(
