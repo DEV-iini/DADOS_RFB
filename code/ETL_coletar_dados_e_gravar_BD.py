@@ -1,10 +1,11 @@
 from datetime import date
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
-import mysql.connector
 from sqlalchemy.ext.declarative import declarative_base
+import mysql.connector
 import bs4 as bs
 import ftplib
+import getenv
 import gzip
 import os
 import pandas as pd
@@ -240,23 +241,24 @@ for i in range(len(Items)):
 # Conectar no banco de dados:
 # Dados da conexão com o BD
 logging.info(' Acesso Banco de dados')
-db_host = os.getenv('DB_HOST').strip()
-db_name = os.getenv('DB_NAME').strip()
-db_user = os.getenv('DB_USER').strip()
-db_pass = os.getenv('DB_PASSWORD').strip()
+db_host = os.getenv('DB_HOST')
+db_name = os.getenv('DB_NAME')
+db_user = os.getenv('DB_USER')
+db_pass = os.getenv('DB_PASSWORD')
 
 
-con = mysql.connector.connect(
-    host=db_host, 
-    database=db_name, 
+conexao = mysql.connector.connect(
+    host=db_host,
     user=db_user,
-    password=db_pass
+    password=db_pass,
+    database=db_name   
 )
+cursor = conexao.cursor()
 
 if con.is_connected():
     logging.info(' Banco de dados conectado')
 
-try:
+
     #mydb = mysql.connector.connect(
     #    host=getEnv('DB_HOST'),
     #    user=getEnv('DB_USER'),
@@ -265,12 +267,12 @@ try:
     #    port=getEnv('DB_PORT')
     #)
 
-    engine = mydb.cursor()
+    
 
     # Conectar
-    engine = create_engine(f'mysql+mysqlconnector://{getEnv('DB_USER')}:{getEnv('DB_PASSWORD')}@{getEnv('DB_HOST')}/{getEnv('DB_NAME')}, pool_recycle={getEnv('DB_PORT')}')
+    #engine = create_engine(f'mysql+mysqlconnector://{getEnv('DB_USER')}:{getEnv('DB_PASSWORD')}@{getEnv('DB_HOST')}/{getEnv('DB_NAME')}, pool_recycle={getEnv('DB_PORT')}')
 
-except mysql.connector.Error as err:
+#except mysql.connector.Error as err:
     print(f"Erro ao conectar ao banco de dados")
     logging.info('Erro ao conectar ao banco de dados: {err}')
     pass
