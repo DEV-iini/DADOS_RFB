@@ -882,16 +882,15 @@ print("""
 ## Criar índices na base de dados [...]
 #######################################
 """)
-cur.execute(
-CREATE TABLE empresa_cnpj on empresa(cnpj_basico);
-commit;
-CREATE TABLE estabelecimento_cnpj on estabelecimento(cnpj_basico);
-commit;
-CREATE TABLE socios_cnpj on socios(cnpj_basico);
-commit;
-CREATE TABLE simples_cnpj on simples(cnpj_basico);
-commit;
-)
+cur.execute('
+CREATE INDEX empresa_cnpj ON empresa(cnpj_basico);
+conexao.commit;
+CREATE INDEX estabelecimento_cnpj ON estabelecimento(cnpj_basico);
+conexao.commit;
+CREATE INDEX socios_cnpj ON socios(cnpj_basico);
+conexao.commit;
+CREATE INDEX simples_cnpj ON simples(cnpj_basico);
+conexao.commit;')
 
 conexao.commit()
 print("""
