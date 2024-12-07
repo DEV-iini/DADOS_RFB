@@ -72,20 +72,12 @@ def to_sql(dataframe, **kwargs):
 
     for df_chunk in (dataframe[i:i + size] for i in range(0, len(dataframe),size)):
         df_chunk.to_sql(**kwargs)
-    #    index = i * size
-    #    percent = (index * 100) / total
-    #    progress = f'{name} {percent:.2f}% {index:0{len(str(total))}}/{total}'
-    #    sys.stdout.write(f'\r{progress}')
-
 
 # %%
-
 # Ler arquivo de configuração de ambiente # https://dev.to/jakewitcher/using-env-files-for-environment-variables-in-python-applications-55a1
-
 
 def getEnv(env):
     return os.getenv(env)
-
 
 # print('Especifique o local do seu arquivo de configuração ".env". Por exemplo: C:\...\Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ\code')
 # C:\Aphonso_C\Git\Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ\code
@@ -156,7 +148,6 @@ for f in Files:
 ########################################################################################################################
 # Create this bar_progress method which is invoked automatically from wget:
 
-
 def bar_progress(current, total, width=80):
     progress_message = "Downloading: %d%% [%d / %d] bytes - " % (
         current / total * 100, current, total)
@@ -167,6 +158,7 @@ def bar_progress(current, total, width=80):
 
 # %%
 # Download arquivos ################################################################################################################################
+logging.info('Download arquivos')
 i_l = 0
 for l in Files:
     # Download dos arquivos
@@ -179,11 +171,6 @@ for l in Files:
         wget.download(url, out=output_files, bar=bar_progress)
 
 # %%
-# Download layout:
-# Layout = 'https://www.gov.br/receitafederal/pt-br/assuntos/orientacao-tributaria/cadastros/consultas/arquivos/NOVOLAYOUTDOSDADOSABERTOSDOCNPJ.pdf'
-# print('Baixando layout:')
-# wget.download(Layout, out=output_files, bar=bar_progress)
-
 ####################################################################################################################################################
 
 # %%
@@ -191,6 +178,7 @@ for l in Files:
 i_l = 0
 for l in Files:
     try:
+        logging.info('Descompactando arquivo')
         i_l += 1
         print('Descompactando arquivo:')
         print(str(i_l) + ' - ' + l)
@@ -205,11 +193,12 @@ for l in Files:
 ## LER E INSERIR DADOS #################################################################################################
 ########################################################################################################################
 insert_start = time.time()
-
+logging.info('LER E INSERIR DADOS')
 # Files:
 Items = [name for name in os.listdir(extracted_files) if name.endswith('')]
 
 # Separar arquivos:
+logging.info('Separar arquivos')
 arquivos_empresa = []
 arquivos_estabelecimento = []
 arquivos_socios = []
@@ -248,20 +237,19 @@ for i in range(len(Items)):
 # Conectar no banco de dados:
 # Dados da conexão com o BD
 logging.info(' Acesso Banco de dados')
-try:
-    conexao = mysql.connector.connect(
-        host=db_host,
-        user=db_user,
-        password=db_pass,
-     database=db_name   
-    )
-    cur = conexao.cursor()
-except mysql.connector.Error as err:
-    logging.info('Erro ao conectar ao banco de dados: {err}')
-finally:
-    if conexao.is_connected():
-        logging.info(' Banco de dados conectado')
-        conexao.close()
+
+conexao = mysql.connector.connect(
+    host=os.getenv('db_host'),
+    user=os.getenv('db_user'),
+    password=os.getenv('db_password'),
+    database=os.getenv('db_name')   
+)
+cur = conexao.cursor()
+
+if conexao.is_connected():
+    conexao.close()
+else:
+    logging.info('Conexao falhou') 
 
 # %%
 # Arquivos de empresa:
@@ -271,18 +259,17 @@ print("""
 ## Arquivos de EMPRESA:
 #######################
 """)
-
+logging.info('Ler arquivos de Empresa')
 # Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS empresa;')
-conexao.commit()
-
-for e in range(0, len(arquivos_empresa)):
-    print('Trabalhando no arquivo: '+arquivos_empresa[e]+' [...]')
-    try:
-        del empresa
-    except:
-        pass
-
+try:
+    cur.execute('DROP TABLE IF EXISTS empresa;')
+    conexao.commit()
+    for e in range(0, len(arquivos_empresa)):
+        print('Trabalhando no arquivo: '+arquivos_empresa[e]+' [...]')
+        try:
+            del empresa
+        except:
+            pass
     empresa = pd.DataFrame(columns=[0, 1, 2, 3, 4, 5, 6])
     empresa_dtypes = {0: 'object', 1: 'object', 2: 'object',
                       3: 'object', 4: 'object', 5: 'object', 6: 'object'}
@@ -296,11 +283,9 @@ for e in range(0, len(arquivos_empresa)):
                           dtype=empresa_dtypes,
                           encoding='utf-8',
                           )
-
-    # Tratamento do arquivo antes de inserir na base:
+     # Tratamento do arquivo antes de inserir na base:
     empresa = empresa.reset_index()
     del empresa['index']
-
     # Renomear colunas
     empresa.columns = ['cnpj_basico', 'razao_social', 'natureza_juridica',
                        'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']
@@ -317,15 +302,17 @@ for e in range(0, len(arquivos_empresa)):
     print('Arquivo ' + arquivos_empresa[e] +
           ' inserido com sucesso no banco de dados!')
 
-try:
-    del empresa
+    try:
+        del empresa
+    except:
+        pass
+    print('Arquivos de empresa finalizados!')
+    empresa_insert_end = time.time()
+    empresa_Tempo_insert = round((empresa_insert_end - empresa_insert_start))
+    print('Tempo de execução do processo de empresa (em segundos): ' +
+      str(empresa_Tempo_insert))
 except:
     pass
-print('Arquivos de empresa finalizados!')
-empresa_insert_end = time.time()
-empresa_Tempo_insert = round((empresa_insert_end - empresa_insert_start))
-print('Tempo de execução do processo de empresa (em segundos): ' +
-      str(empresa_Tempo_insert))
 
 # %%
 # Arquivos de estabelecimento:
