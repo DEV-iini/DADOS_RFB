@@ -75,12 +75,12 @@ def chunker(df):
 
     # Gravar dados no banco:
     # Empresa
-def process_and_insert_chunk(df_chunk, con, table_name):
+def process_and_insert_chunk(df_chunk, conexao, table_name):
+    # Conexao (URI)
+    uri = f"mysql+mysqlconnector://{os.getenv('db_user')}:{os.getenv('db_password')}@{os.getenv('db_host')}:{os.getenv('DB_PORT')}/{os.getenv('db_name')}"
     # Processo para inserir no banco de dados
-    df_chunk.to_sql(table_name, con, if_exists='append', index=False)
+    df_chunk.to_sql(table_name, uri, if_exists='append', index=False)
     print('Tabela' + table_name + ' inserido com sucesso no banco de dados!')
-
-
 
 # %%
 # Ler arquivo de configuração de ambiente # https://dev.to/jakewitcher/using-env-files-for-environment-variables-in-python-applications-55a1
@@ -278,7 +278,7 @@ for e in range(0, len(arquivos_empresa)):
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
     empresa = dd.DataFrame(column_data, name='empresa_dataframe', meta={'cnpj_basico': 'object', 'razao_social': 'object', 'natureza_juridica': 'object', 'qualificacao_responsavel': 'object', '': 'object', 'porte_empresa': 'object', 'ente_federativo_responsavel': 'object'}, divisions=divisoes)
     # Reparticionar em 10 partições
-    empresa.columns = column_names
+ 
     extracted_file_path = os.path.join(extracted_files, arquivos_empresa[e])
     empresa = dd.read_csv(extracted_file_path,
                           sep=';',
@@ -287,7 +287,8 @@ for e in range(0, len(arquivos_empresa)):
                           header=None,
                           dtype='object',
                           encoding='latin1')
-
+    # Renomear colunas                     
+    empresa.columns = column_names
     # Replace "," por "."
     if 'capital_social' in empresa.columns:
         # Apply the transformation if the column exists
@@ -307,6 +308,7 @@ for e in range(0, len(arquivos_empresa)):
         del empresa
     except:
         pass    
+
     print('Arquivos de empresa finalizados!')
     empresa_insert_end = time.time()
     empresa_Tempo_insert = round((empresa_insert_end - empresa_insert_start))
@@ -316,9 +318,9 @@ for e in range(0, len(arquivos_empresa)):
 # Arquivos de estabelecimento:
 estabelecimento_insert_start = time.time()
 print("""
-############################### 
-## Arquivos de ESTABELECIMENTO:
-###############################
+####################################
+### Arquivos de ESTABELECIMENTO: ###
+####################################
 """)
 logging.info('Ler arquivos de Estabelecimento')
 # Drop table antes do insert
