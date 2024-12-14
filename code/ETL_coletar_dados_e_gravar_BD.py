@@ -81,7 +81,7 @@ def process_and_insert_chunk(df_chunk, conexao, table_name):
     uri = f"mysql+mysqlconnector://{os.getenv('db_user')}:{os.getenv('db_password')}@{os.getenv('db_host')}:{os.getenv('DB_PORT')}/{os.getenv('db_name')}"
     # Processo para inserir no banco de dados
     df_chunk.to_sql(table_name, uri, if_exists='append', index=False)
-    print('Tabela' + table_name + ' inserido com sucesso no banco de dados!')
+    print('Tabela : ' + table_name + ' inserido com sucesso no banco de dados!')
 
 # %%
 # Ler arquivo de configuração de ambiente # https://dev.to/jakewitcher/using-env-files-for-environment-variables-in-python-applications-55a1
@@ -167,11 +167,11 @@ def bar_progress(current, total, width=80):
 # %%
 # Download arquivos ################################################################################################################################
 logging.info('Download arquivos')
+print('Baixando arquivo:')
 i_l = 0
 for l in Files:
     # Download dos arquivos
     i_l += 1
-    print('Baixando arquivo:')
     print(str(i_l) + ' - ' + l)
     url = dados_rf+'/'+l  # type: ignore
     file_name = os.path.join(output_files, l)
@@ -182,12 +182,12 @@ for l in Files:
 ####################################################################################################################################################
 # %%
 # Extracting files:
+print('Descompactando arquivo:')
 i_l = 0
 for l in Files:
     try:
         logging.info('Descompactando arquivo')
         i_l += 1
-        print('Descompactando arquivo:')
         print(str(i_l) + ' - ' + l)
         full_path = os.path.join(output_files, l)
         with zipfile.ZipFile(full_path, 'r') as zip_ref:
@@ -263,9 +263,9 @@ else:
 # Arquivos de empresa:
 empresa_insert_start = time.time()
 print("""
-##########################
-## Arquivos de EMPRESA: ##
-##########################
+#########################
+## Arquivos de EMPRESA:  ##
+#########################
 """)
 i=0
 logging.info('Ler arquivos de Empresa')
@@ -483,7 +483,7 @@ for e in range(0, len(arquivos_socios)):
         pass
 
     extracted_file_path = os.path.join(extracted_files, arquivos_socios[e])
-    socios = dd.read_csv(filepath_or_buffer=extracted_file_path,
+    socios = dd.read_csv(extracted_file_path,
                          sep=';',
                          # nrows=100,
                          skiprows=0,
