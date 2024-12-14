@@ -25,6 +25,7 @@ import wget
 import zipfile
 
 cnpj_basico=''
+i=0
 # Gerar Log
 logging.basicConfig(filename='DADOS_RFB.log', level=logging.INFO)
 logging.info('Iniciando o processo de carga')
@@ -266,6 +267,7 @@ print("""
 ## Arquivos de EMPRESA: ##
 ##########################
 """)
+i=0
 logging.info('Ler arquivos de Empresa')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS empresa;')
@@ -322,124 +324,132 @@ print("""
 ### Arquivos de ESTABELECIMENTO: ###
 ####################################
 """)
+i=0
 logging.info('Ler arquivos de Estabelecimento')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS estabelecimento;')
-try:   
-    conexao.commit()
-
-    for e in range(0, len(arquivos_estabelecimento)):
-        print('Trabalhando no arquivo: '+arquivos_estabelecimento[e]+' [...]')
-        try:
-            del estabelecimento
-        except:
-            pass
-
-        estabelecimento = dd.DataFrame(columns=[
-                                   1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28])
-        extracted_file_path = os.path.join(
-        extracted_files, arquivos_estabelecimento[e])
-
-        estabelecimento = dd.read_csv(filepath_or_buffer=extracted_file_path,
+conexao.commit()
+for e in range(0, len(arquivos_estabelecimento)):
+    print('Trabalhando no arquivo: '+arquivos_estabelecimento[e]+' [...]')
+    column_names = ['cnpj_basico', 
+                    'cnpj_ordem', 
+                    'cnpj_dv', 
+                    'identificador_matriz_filial', 
+                    'nome_fantasia', 
+                    'situacao_cadastral', 
+                    'data_situacao_cadastral', 
+                    'motivo_situacao_cadastral', 
+                    'nome_cidade_exterior',
+                    'pais',
+                    'data_inicio_atividade',
+                    'cnae_fiscal_principal',
+                    'cnae_fiscal_secundaria',
+                    'tipo_logradouro',
+                    'logradouro',
+                    'numero',
+                    'complemento',
+                    'bairro',
+                    'cep',
+                    'uf',
+                    'municipio',
+                    'ddd_1',
+                    'telefone_1',
+                    'ddd_2',
+                    'telefone_2',
+                    'ddd_fax',
+                    'fax',
+                    'correio_eletronico',
+                    'situacao_especial',
+                    'data_situacao_especial']
+    column_data = {name: [] for name in column_names}
+    num_particoes = 10
+    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+    estabelecimento = dd.DataFrame(column_data, 
+                                    name='empresa_dataframe', 
+                                    meta={'cnpj_basico': 'object', 
+                                        'cnpj_ordem': 'object', 
+                                        'cnpj_dv': 'object', 
+                                        'identificador_matriz_filial': 'object', 
+                                        'nome_fantasia': 'object', 
+                                        'situacao_cadastral': 'object', 
+                                        'data_situacao_cadastral': 'object', 
+                                        'motivo_situacao_cadastral': 'object', 
+                                        'nome_cidade_exterior': 'object',
+                                        'pais': 'object',
+                                        'data_inicio_atividade': 'object',
+                                        'cnae_fiscal_principal': 'object',
+                                        'cnae_fiscal_secundaria': 'object',
+                                        'tipo_logradouro': 'object',
+                                        'logradouro': 'object',
+                                        'numero': 'object',
+                                        'complemento': 'object',
+                                        'bairro': 'object',
+                                        'cep': 'object',
+                                        'uf': 'object',
+                                        'municipio': 'object',
+                                        'ddd_1': 'object',
+                                        'telefone_1': 'object',
+                                        'ddd_2': 'object',
+                                        'telefone_2': 'object',
+                                        'ddd_fax': 'object',
+                                        'fax': 'object',
+                                        'correio_eletronico': 'object',
+                                        'situacao_especial': 'object',
+                                        'data_situacao_especial': 'object'}, 
+                                        divisions=divisoes)
+    # Reparticionar em 10 partições
+    try:
+        del estabelecimento
+    except:
+        pass
+                  
+    extracted_file_path = os.path.join(extracted_files, arquivos_estabelecimento[e])
+    estabelecimento = dd.read_csv(extracted_file_path,
                                   sep=';',
                                   # nrows=100,
                                   skiprows=0,
                                   header=None,
                                   dtype='object',
-                                  encoding='latin1',
-                                  )
+                                  encoding='latin1')
+    # Renomear Colunas
+    estabelecimento.columns = column_names
 
-        # Tratamento do arquivo antes de inserir na base:
-        estabelecimento = estabelecimento.reset_index()
-        del estabelecimento['index']
+    # Tratamento do arquivo antes de inserir na base:
+    estabelecimento = estabelecimento.reset_index()
+    del estabelecimento['index']
 
-        # Renomear colunas
-        estabelecimento.columns = ['cnpj_basico',
-                               'cnpj_ordem',
-                               'cnpj_dv',
-                               'identificador_matriz_filial',
-                               'nome_fantasia',
-                               'situacao_cadastral',
-                               'data_situacao_cadastral',
-                               'motivo_situacao_cadastral',
-                               'nome_cidade_exterior',
-                               'pais',
-                               'data_inicio_atividade',
-                               'cnae_fiscal_principal',
-                               'cnae_fiscal_secundaria',
-                               'tipo_logradouro',
-                               'logradouro',
-                               'numero',
-                               'complemento',
-                               'bairro',
-                               'cep',
-                               'uf',
-                               'municipio',
-                               'ddd_1',
-                               'telefone_1',
-                               'ddd_2',
-                               'telefone_2',
-                               'ddd_fax',
-                               'fax',
-                               'correio_eletronico',
-                               'situacao_especial',
-                               'data_situacao_especial']
+    # Gravar dados no banco:
+    # estabelecimento
+    for i in range(estabelecimento.npartitions):
+        df_chunk = estabelecimento.get_partition(i)
+        process_and_insert_chunk(df_chunk, conexao,'estabelecimento')
 
-        # Gravar dados no banco:
-        # estabelecimento
-        to_sql(estabelecimento, name='estabelecimento', con=conexao, if_exists='append', index=False)
-        print('Arquivo ' +
-          arquivos_estabelecimento[e] + ' inserido com sucesso no banco de dados!')
-
-        try:
-            del estabelecimento
-        except:
-            pass
-        print('Arquivos de estabelecimento finalizados!')
-        estabelecimento_insert_end = time.time()
-        estabelecimento_Tempo_insert = round((estabelecimento_insert_end - estabelecimento_insert_start))
-        print('Tempo de execução do processo de estabelecimento (em segundos): ' + str(estabelecimento_Tempo_insert))
-except:
-    pass
+    try:
+        del estabelecimento
+    except:
+        pass
+    
+    print('Arquivos de estabelecimento finalizados!')
+    estabelecimento_insert_end = time.time()
+    estabelecimento_Tempo_insert = round((estabelecimento_insert_end - estabelecimento_insert_start))
+    print('Tempo de execução do processo de estabelecimento (em segundos): ' + str(estabelecimento_Tempo_insert))
 
 # %%
 # Arquivos de socios:
 socios_insert_start = time.time()
 print("""
-######################
-## Arquivos de SOCIOS:
-######################
+#########################
+## Arquivos de SOCIOS: ##
+#########################
 """)
+i=0
 logging.info('Ler arquivos de Socios')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS socios;')
-try:
-    conexao.commit()
-
-    for e in range(0, len(arquivos_socios)):
-        print('Trabalhando no arquivo: '+arquivos_socios[e]+' [...]')
-        try:
-            del socios
-        except:
-            pass
-
-        extracted_file_path = os.path.join(extracted_files, arquivos_socios[e])
-        socios = dd.DataFrame(columns=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
-        socios = dd.read_csv(filepath_or_buffer=extracted_file_path,
-                         sep=';',
-                         # nrows=100,
-                         skiprows=0,
-                         header=None,
-                         dtype='object',
-                         encoding='latin1',
-                         )
-
-        # Tratamento do arquivo antes de inserir na base:
-        socios = socios.reset_index()
-        del socios['index']
-
-        # Renomear colunas
-        socios.columns = ['cnpj_basico',
+conexao.commit()
+for e in range(0, len(arquivos_socios)):
+    print('Trabalhando no arquivo: '+arquivos_socios[e]+' [...]')
+    column_names = ['cnpj_basico',
                       'identificador_socio',
                       'nome_socio_razao_social',
                       'cpf_cnpj_socio',
@@ -449,150 +459,172 @@ try:
                       'representante_legal',
                       'nome_do_representante',
                       'qualificacao_representante_legal',
-                      'faixa_etaria']
+                      'faixa_etaria']                      
+    column_data = {name: [] for name in column_names}
+    num_particoes = 10
+    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+    socios = dd.DataFrame(column_data, 
+                            name='empresa_dataframe', 
+                            meta={'cnpj_basico': 'object',
+                                'identificador_socio': 'object',
+                                'nome_socio_razao_social': 'object',
+                                'cpf_cnpj_socio': 'object',
+                                'qualificacao_socio': 'object',
+                                'data_entrada_sociedade': 'object',
+                                'pais': 'object',
+                                'representante_legal': 'object',
+                                'nome_do_representante': 'object',
+                                'qualificacao_representante_legal': 'object',
+                                'faixa_etaria': 'object'}, divisions=divisoes)
+    # Reparticionar em 10 partições
+    try:
+        del socios
+    except:
+        pass
 
-        # Gravar dados no banco:
-        # socios
-        to_sql(socios, name='socios', con=conexao, if_exists='append', index=False)
-        print('Arquivo ' + arquivos_socios[e] +
-          ' inserido com sucesso no banco de dados!')
+    extracted_file_path = os.path.join(extracted_files, arquivos_socios[e])
+    socios = dd.read_csv(filepath_or_buffer=extracted_file_path,
+                         sep=';',
+                         # nrows=100,
+                         skiprows=0,
+                         header=None,
+                         dtype='object',
+                         encoding='latin1')
+    # Tratamento do arquivo antes de inserir na base:
+    socios = socios.reset_index()
+    del socios['index']
 
-        try:
-            del socios
-        except:
-            pass
+    # Renomear colunas
+    socios.columns = column_names
+
+    # Gravar dados no banco:
+    # socios
+    for i in range(socios.npartitions):
+        df_chunk = socios.get_partition(i)
+        process_and_insert_chunk(df_chunk, conexao,'socios')
+
+    try:
+        del socios
+    except:
+        pass
         print('Arquivos de socios finalizados!')
         socios_insert_end = time.time()
         socios_Tempo_insert = round((socios_insert_end - socios_insert_start))
         print('Tempo de execução do processo de sócios (em segundos): ' + str(socios_Tempo_insert))
-except:
-    pass
 
 # %%
 # Arquivos de simples:
 simples_insert_start = time.time()
 print("""
-################################
-## Arquivos do SIMPLES NACIONAL:
-################################
+###################################
+## Arquivos do SIMPLES NACIONAL: ##
+###################################
 """)
+i=0
 logging.info('Ler arquivos de Simples Nacional')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS simples;')
-try:
-    conexao.commit()
+conexao.commit()
+for e in range(0, len(arquivos_simples)):
+    print('Trabalhando no arquivo: '+arquivos_simples[e]+' [...]')
+    column_names = ['cnpj_basico',
+                    'opcao_pelo_simples',
+                    'data_opcao_simples',
+                    'data_exclusao_simples',
+                    'opcao_mei',
+                    'data_opcao_mei',
+                    'data_exclusao_mei']
+    column_data = {name: [] for name in column_names}
+    num_particoes = 10
+    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+    simples = dd.DataFrame(column_data, 
+                            name='simples_dataframe', 
+                            meta={'cnpj_basico': 'object',
+                                    'opcao_pelo_simples': 'object',
+                                    'data_opcao_simples': 'object',
+                                    'data_exclusao_simples': 'object',
+                                    'opcao_mei': 'object',
+                                    'data_opcao_mei': 'object',
+                                    'data_exclusao_mei': 'object'}, divisions=divisoes)
+    # Reparticionar em 10 partições
+    try:
+        del simples
+    except:
+        pass
 
-    for e in range(0, len(arquivos_simples)):
-        print('Trabalhando no arquivo: '+arquivos_simples[e]+' [...]')
-        try:
-            del simples
-        except:
-            pass
+    # Verificar tamanho do arquivo:
+    print('Lendo o arquivo ' + arquivos_simples[e]+' [...]')
+    extracted_file_path = os.path.join(extracted_files, arquivos_simples[e])
+    simples = dd.read_csv(extracted_file_path,
+                        sep=';',
+                        nrows=nrows,
+                        skiprows=skiprows,
+                        header=None,
+                        dtype='object',
+                        encoding='latin1')
+    # Renomear colunas
+    simples.columns = column_names 
+    # Tratamento do arquivo antes de inserir na base:
+    simples = simples.reset_index()
+    del simples['index']
+    # Gravar dados no banco:
+    # simples
+    for i in range(simples.npartitions):
+        df_chunk = simples.get_partition(i)
+        process_and_insert_chunk(df_chunk, conexao,'simples')
 
-        # Verificar tamanho do arquivo:
-        print('Lendo o arquivo ' + arquivos_simples[e]+' [...]')
-        extracted_file_path = os.path.join(extracted_files, arquivos_simples[e])
+    try:
+        del simples
+    except:
+        pass
 
-        simples_lenght = sum(1 for line in open(extracted_file_path, "r"))
-        print('Linhas no arquivo do Simples ' +
-          arquivos_simples[e] + ': '+str(simples_lenght))
-
-        tamanho_das_partes = 1000000  # Registros por carga
-        partes = round(simples_lenght / tamanho_das_partes)
-        nrows = tamanho_das_partes
-        skiprows = 0
-
-        print('Este arquivo será dividido em ' + str(partes) +
-          ' partes para inserção no banco de dados')
-
-        for i in range(0, partes):
-            print('Iniciando a parte ' + str(i+1) + ' [...]')
-            simples = dd.DataFrame(columns=[1, 2, 3, 4, 5, 6])
-
-            simples = dd.read_csv(filepath_or_buffer=extracted_file_path,
-                              sep=';',
-                              nrows=nrows,
-                              skiprows=skiprows,
-                              header=None,
-                              dtype='object',
-                              encoding='latin1',
-                              )
-
-            # Tratamento do arquivo antes de inserir na base:
-            simples = simples.reset_index()
-            del simples['index']
-
-            # Renomear colunas
-            simples.columns = ['cnpj_basico',
-                           'opcao_pelo_simples',
-                           'data_opcao_simples',
-                           'data_exclusao_simples',
-                           'opcao_mei',
-                           'data_opcao_mei',
-                           'data_exclusao_mei']
-
-            skiprows = skiprows+nrows
-
-            # Gravar dados no banco:
-            # simples
-            to_sql(simples, name='simples', con=conexao,
-               if_exists='append', index=False)
-            print('Arquivo ' + arquivos_simples[e] +
-              ' inserido com sucesso no banco de dados! - Parte ' + str(i+1))
-
-            try:
-                del simples
-            except:
-                pass
-
-        try:
-            del simples
-        except:
-            pass
-
-        print('Arquivos do simples finalizados!')
-        simples_insert_end = time.time()
-        simples_Tempo_insert = round((simples_insert_end - simples_insert_start))
-        print('Tempo de execução do processo do Simples Nacional (em segundos): ' + str(simples_Tempo_insert))
-except:
-    pass
+    print('Arquivos do simples finalizados!')
+    simples_insert_end = time.time()
+    simples_Tempo_insert = round((simples_insert_end - simples_insert_start))
+    print('Tempo de execução do processo do Simples Nacional (em segundos): ' + str(simples_Tempo_insert))
 
 # %%
 # Arquivos de cnae:
 cnae_insert_start = time.time()
 print("""
-######################
-## Arquivos de cnae:
-######################
+#######################
+## Arquivos de cnae: ##
+#######################
 """)
+i=0
 logging.info('Ler arquivos de CNAE')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS cnae;')
-try:
-    conexao.commit()
-    for e in range(0, len(arquivos_cnae)):
-        print('Trabalhando no arquivo: '+arquivos_cnae[e]+' [...]')
-        try:
-            del cnae
-        except:
-            pass
-        extracted_file_path = os.path.join(extracted_files, arquivos_cnae[e])
-        cnae = dd.DataFrame(columns=[1, 2])
-        cnae = dd.read_csv(filepath_or_buffer=extracted_file_path, sep=';',
-                       skiprows=0, header=None, dtype='object', encoding='latin1')
+conexao.commit()
+for e in range(0, len(arquivos_cnae)):
+    print('Trabalhando no arquivo: '+arquivos_cnae[e]+' [...]')
+    column_names = ['codigo', 'descricao']
+    column_data = {name: [] for name in column_names}
+    num_particoes = 10
+    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+    cnae = dd.DataFrame(column_data, name='cnae_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    # Reparticionar em 10 partições
 
-        # Tratamento do arquivo antes de inserir na base:
-        cnae = cnae.reset_index()
-        del cnae['index']
+    extracted_file_path = os.path.join(extracted_files, arquivos_cnae[e])
+    cnae = dd.read_csv(extracted_file_path,
+                        sep=';',
+                        # nrows=100,
+                        skiprows=0,
+                        header=None,
+                        dtype='object',
+                        encoding='latin1')
+    # Renomear colunas
+    cnae.columns = column_names
 
-        # Renomear colunas
-        cnae.columns = ['codigo', 'descricao']
-
-        # Gravar dados no banco:
-        # cnae
-        to_sql(cnae, name='cnae', con=conexao, if_exists='append', index=False)
-        print('Arquivo ' + arquivos_cnae[e] +
-          ' inserido com sucesso no banco de dados!')
+    # Tratamento do arquivo antes de inserir na base:
+    cnae = cnae.reset_index()
+    del cnae['index']
+    
+    # Gravar dados no banco:
+    # cnae
+    for i in range(cnae.npartitions):
+        df_chunk = cnae.get_partition(i)
+        process_and_insert_chunk(df_chunk, conexao,'cnae')
 
     try:
         del cnae
@@ -602,47 +634,53 @@ try:
     cnae_insert_end = time.time()
     cnae_Tempo_insert = round((cnae_insert_end - cnae_insert_start))
     print('Tempo de execução do processo de cnae (em segundos): ' + str(cnae_Tempo_insert))
-except:
-    pass
+
 
 # %%
 # Arquivos de moti:
 moti_insert_start = time.time()
 print("""
-#########################################
-## Arquivos de motivos da situação atual:
-#########################################
+############################################
+## Arquivos de motivos da situação atual: ##
+############################################
 """)
+i=0
 logging.info('Ler arquivos de Situacao Atual')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS moti;')
-try:   
-    conexao.commit()
+conexao.commit()
+for e in range(0, len(arquivos_moti)):
+    print('Trabalhando no arquivo: '+arquivos_moti[e]+' [...]')
+    column_names = ['codigo', 'descricao']
+    column_data = {name: [] for name in column_names}
+    num_particoes = 10
+    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+    moti = dd.DataFrame(column_data, name='empresa_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    # Reparticionar em 10 partições
+    try:
+        del moti
+    except:
+        pass
 
-    for e in range(0, len(arquivos_moti)):
-        print('Trabalhando no arquivo: '+arquivos_moti[e]+' [...]')
-        try:
-            del moti
-        except:
-            pass
+    extracted_file_path = os.path.join(extracted_files, arquivos_moti[e])
+    moti = dd.read_csv(extracted_file_path,
+                        sep=';',
+                        skiprows=0, 
+                        header=None, 
+                        dtype='object', 
+                        encoding='latin1')
+    # Renomear colunas
+    moti.columns = column_names
 
-        extracted_file_path = os.path.join(extracted_files, arquivos_moti[e])
-        moti = dd.DataFrame(columns=[1, 2])
-        moti = dd.read_csv(filepath_or_buffer=extracted_file_path, sep=';',
-                       skiprows=0, header=None, dtype='object', encoding='latin1')
+    # Tratamento do arquivo antes de inserir na base:
+    moti = moti.reset_index()
+    del moti['index']
 
-        # Tratamento do arquivo antes de inserir na base:
-        moti = moti.reset_index()
-        del moti['index']
-
-        # Renomear colunas
-        moti.columns = ['codigo', 'descricao']
-
-        # Gravar dados no banco:
-        # moti
-        to_sql(moti, name='moti', con=conexao, if_exists='append', index=False)
-        print('Arquivo ' + arquivos_moti[e] +
-          ' inserido com sucesso no banco de dados!')
+    # Gravar dados no banco:
+    # moti
+    for i in range(moti.npartitions):
+        df_chunk = moti.get_partition(i)
+        process_and_insert_chunk(df_chunk, conexao,'moti')
 
     try:
         del moti
@@ -653,8 +691,7 @@ try:
     moti_Tempo_insert = round((moti_insert_end - moti_insert_start))
     print('Tempo de execução do processo de motivos da situação atual (em segundos): ' +
       str(moti_Tempo_insert))
-except:
-    pass
+
 # %%
 # Arquivos de munic:
 munic_insert_start = time.time()
@@ -663,36 +700,43 @@ print("""
 ## Arquivos de municípios:
 ##########################
 """)
+i=0
 logging.info('Ler arquivos de Municipios')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS munic;')
-try:
-    conexao.commit()
+conexao.commit()
+for e in range(0, len(arquivos_munic)):
+    print('Trabalhando no arquivo: '+arquivos_munic[e]+' [...]')
+    column_names = ['codigo', 'descricao']
+    column_data = {name: [] for name in column_names}
+    num_particoes = 10
+    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+    munic = dd.DataFrame(column_data, name='empresa_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    # Reparticionar em 10 partições    
+    try:
+        del munic
+    except:
+        pass
 
-    for e in range(0, len(arquivos_munic)):
-        print('Trabalhando no arquivo: '+arquivos_munic[e]+' [...]')
-        try:
-            del munic
-        except:
-            pass
+    extracted_file_path = os.path.join(extracted_files, arquivos_munic[e])
+    munic = dd.read_csv(extracted_file_path, 
+                        sep=';',
+                        skiprows=0, 
+                        header=None, 
+                        dtype='object', 
+                        encoding='latin1')
+    # Renomear colunas
+    munic.columns = column_names
+    
+    # Tratamento do arquivo antes de inserir na base:
+    munic = munic.reset_index()
+    del munic['index']
 
-        extracted_file_path = os.path.join(extracted_files, arquivos_munic[e])
-        munic = dd.DataFrame(columns=[1, 2])
-        munic = dd.read_csv(filepath_or_buffer=extracted_file_path, sep=';',
-                        skiprows=0, header=None, dtype='object', encoding='latin1')
-
-        # Tratamento do arquivo antes de inserir na base:
-        munic = munic.reset_index()
-        del munic['index']
-
-        # Renomear colunas
-        munic.columns = ['codigo', 'descricao']
-
-        # Gravar dados no banco:
-        # munic
-        to_sql(munic, name='munic', con=conexao, if_exists='append', index=False)
-        print('Arquivo ' + arquivos_munic[e] +
-          ' inserido com sucesso no banco de dados!')
+    # Gravar dados no banco:
+    # munic
+    for i in range(munic.npartitions):
+        df_chunk = munic.get_partition(i)
+        process_and_insert_chunk(df_chunk, conexao,'munic')
 
     try:
         del munic
@@ -703,152 +747,168 @@ try:
     munic_Tempo_insert = round((munic_insert_end - munic_insert_start))
     print('Tempo de execução do processo de municípios (em segundos): ' +
       str(munic_Tempo_insert))
-except:
-    pass
+
 # %%
 # Arquivos de natju:
 natju_insert_start = time.time()
 print("""
-#################################
-## Arquivos de natureza jurídica:
-#################################
+####################################
+## Arquivos de natureza jurídica: ##
+####################################
 """)
 logging.info('Ler arquivos de Natureza Juridica')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS natju;')
-try:
-    conexao.commit()
+conexao.commit()
+for e in range(0, len(arquivos_natju)):
+    print('Trabalhando no arquivo: '+arquivos_natju[e]+' [...]')
+    column_names = ['codigo', 'descricao']
+    column_data = {name: [] for name in column_names}
+    num_particoes = 10
+    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+    natju = dd.DataFrame(column_data, name='natju_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    # Reparticionar em 10 partições    
+    try:
+        del natju
+    except:
+        pass
 
-    for e in range(0, len(arquivos_natju)):
-        print('Trabalhando no arquivo: '+arquivos_natju[e]+' [...]')
-        try:
-            del natju
-        except:
-            pass
+    extracted_file_path = os.path.join(extracted_files, arquivos_natju[e])
+    natju = dd.read_csv(extracted_file_path, 
+                        sep=';',
+                        skiprows=0, 
+                        header=None, 
+                        dtype='object', 
+                        encoding='latin1')
 
-        extracted_file_path = os.path.join(extracted_files, arquivos_natju[e])
-        natju = dd.DataFrame(columns=[1, 2])
-        natju = dd.read_csv(filepath_or_buffer=extracted_file_path, sep=';',
-                        skiprows=0, header=None, dtype='object', encoding='latin1')
+    # Renomear colunas
+    natju.columns = column_names
+    # Tratamento do arquivo antes de inserir na base:
+    natju = natju.reset_index()
+    del natju['index']
 
-        # Tratamento do arquivo antes de inserir na base:
-        natju = natju.reset_index()
-        del natju['index']
+    # Gravar dados no banco:
+    # natju
+    for i in range(natju.npartitions):
+        df_chunk = natju.get_partition(i)
+        process_and_insert_chunk(df_chunk, conexao,'emprenatjusa')     
 
-        # Renomear colunas
-        natju.columns = ['codigo', 'descricao']
-
-        # Gravar dados no banco:
-        # natju
-        to_sql(natju, name='natju', con=conexao, if_exists='append', index=False)
-        print('Arquivo ' + arquivos_natju[e] +
-          ' inserido com sucesso no banco de dados!')
 
     print('Arquivos de natju finalizados!')
     natju_insert_end = time.time()
     natju_Tempo_insert = round((natju_insert_end - natju_insert_start))
     print('Tempo de execução do processo de natureza jurídica (em segundos): ' +
       str(natju_Tempo_insert))
-except:
-    pass
+
 # %%
 # Arquivos de pais:
 pais_insert_start = time.time()
 print("""
-######################
-## Arquivos de país:
-######################
+#######################
+## Arquivos de país: ##
+#######################
 """)
+i=0
 logging.info('Ler arquivos de PAIS')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS pais;')
-try: 
-    conexao.commit()
+conexao.commit()
+for e in range(0, len(arquivos_pais)):
+    print('Trabalhando no arquivo: '+arquivos_pais[e]+' [...]')
+    column_names = ['codigo', 'descricao']
+    column_data = {name: [] for name in column_names}
+    num_particoes = 10
+    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+    pais = dd.DataFrame(column_data, name='pais_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    # Reparticionar em 10 partições
+    try:
+        del pais
+    except:
+        pass
 
-    for e in range(0, len(arquivos_pais)):
-        print('Trabalhando no arquivo: '+arquivos_pais[e]+' [...]')
-        try:
-            del pais
-        except:
-            pass
+    extracted_file_path = os.path.join(extracted_files, arquivos_pais[e])
+    pais = dd.read_csv(extracted_file_path, 
+                        sep=';',
+                        skiprows=0, 
+                        header=None, 
+                        dtype='object', 
+                        encoding='latin1')
+    # Renomear colunas
+    pais.columns = column_names
+    # Tratamento do arquivo antes de inserir na base:
+    pais = pais.reset_index()
+    del pais['index']
 
-        extracted_file_path = os.path.join(extracted_files, arquivos_pais[e])
-        pais = dd.DataFrame(columns=[1, 2])
-        pais = dd.read_csv(filepath_or_buffer=extracted_file_path, sep=';',
-                       skiprows=0, header=None, dtype='object', encoding='latin1')
+    # Gravar dados no banco:
+    # pais
+    for i in range(pais.npartitions):
+        df_chunk = pais.get_partition(i)
+        process_and_insert_chunk(df_chunk, conexao,'pais')
 
-        # Tratamento do arquivo antes de inserir na base:
-        pais = pais.reset_index()
-        del pais['index']
+    try:
+        del pais
+    except:
+        pass
+    print('Arquivos de pais finalizados!')
+    pais_insert_end = time.time()
+    pais_Tempo_insert = round((pais_insert_end - pais_insert_start))
+    print('Tempo de execução do processo de país (em segundos): ' + str(pais_Tempo_insert))
 
-        # Renomear colunas
-        pais.columns = ['codigo', 'descricao']
-
-        # Gravar dados no banco:
-        # pais
-        to_sql(pais, name='pais', con=conexao, if_exists='append', index=False)
-        print('Arquivo ' + arquivos_pais[e] +
-          ' inserido com sucesso no banco de dados!')
-
-        try:
-            del pais
-        except:
-            pass
-        print('Arquivos de pais finalizados!')
-        pais_insert_end = time.time()
-        pais_Tempo_insert = round((pais_insert_end - pais_insert_start))
-        print('Tempo de execução do processo de país (em segundos): ' + str(pais_Tempo_insert))
-except:
-    pass
 # %%
 # Arquivos de qualificação de sócios:
 quals_insert_start = time.time()
 print("""
-######################################
-## Arquivos de qualificação de sócios:
-######################################
+#########################################
+## Arquivos de qualificação de sócios: ##
+#########################################
 """)
+i=0
 logging.info('Ler arquivos de Qualificacao de Socios')
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS quals;')
-try:    
-    conexao.commit()
+conexao.commit()
 
-    for e in range(0, len(arquivos_quals)):
-        print('Trabalhando no arquivo: '+arquivos_quals[e]+' [...]')
-        try:
-            del quals
-        except:
-            pass
+for e in range(0, len(arquivos_quals)):
+    print('Trabalhando no arquivo: '+arquivos_quals[e]+' [...]')
+    column_names = ['codigo', 'descricao']
+    column_data = {name: [] for name in column_names}
+    num_particoes = 10
+    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+    quals = dd.DataFrame(column_data, name='quals_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    # Reparticionar em 10 partições
+    try:
+        del quals
+    except:
+        pass
 
-        extracted_file_path = os.path.join(extracted_files, arquivos_quals[e])
-        quals = dd.DataFrame(columns=[1, 2])
-        quals = dd.read_csv(filepath_or_buffer=extracted_file_path, sep=';',
-                        skiprows=0, header=None, dtype='object', encoding='latin1')
+    extracted_file_path = os.path.join(extracted_files, arquivos_quals[e])
+    quals = dd.requalad_csv(extracted_file_path, 
+                            sep=';',
+                            skiprows=0, 
+                            header=None, 
+                            dtype='object', 
+                            encoding='latin1')
+    # Renomear colunas
+    quals.columns = column_names
+    # Tratamento do arquivo antes de inserir na base:
+    quals = quals.reset_index()
+    del quals['index']
 
-        # Tratamento do arquivo antes de inserir na base:
-        quals = quals.reset_index()
-        del quals['index']
+    # Gravar dados no banco:
+    # quals
+    for i in range(quals.npartitions):
+        df_chunk = quals.get_partition(i)
+        process_and_insert_chunk(df_chunk, conexao,'quals')
 
-        # Renomear colunas
-        quals.columns = ['codigo', 'descricao']
+    try:
+        del quals
+    except:
+        pass
+    print('Arquivos de quals finalizados!')
+    quals_insert_end = time.time()
+    quals_Tempo_insert = round((quals_insert_end - quals_insert_start))
+    print('Tempo de execução do processo de qualificação de sócios (em segundos): ' + str(quals_Tempo_insert))
 
-        # Gravar dados no banco:
-        # quals
-        to_sql(quals, name='quals', con=conexao, if_exists='append', index=False)
-        print('Arquivo ' + arquivos_quals[e] +
-          ' inserido com sucesso no banco de dados!')
-
-        try:
-            del quals
-        except:
-            pass
-        print('Arquivos de quals finalizados!')
-        quals_insert_end = time.time()
-        quals_Tempo_insert = round((quals_insert_end - quals_insert_start))
-        print('Tempo de execução do processo de qualificação de sócios (em segundos): ' + str(quals_Tempo_insert))
-except:
-    pass
 
 # %%
 insert_end = time.time()
