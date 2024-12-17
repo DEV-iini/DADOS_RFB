@@ -113,34 +113,12 @@ def to_sql(dataframe, table_name, connection_uri, if_exists='append', index=Fals
     """
 
     try:
-        for chunk in chunker(dataframe, chunksize):
-            chunk.to_sql(table_name, connection_uri, if_exists='append', index=index, chunksize=10000)
+        logging.info(f"Conectar Banco de dados")
+        to_sql(table_name, connection_uri, if_exists='append', index=index, chunksize=10000)
     except Exception as e:
         logging.error(f"Erro ao inserir dados: {e}")
         print(f"Erro ao inserir dados: {e}")
     
-
-def chunker(df, chunksize=10000):
-    """Divide um DataFrame em chunks de tamanho especificado.
-
-    Args:
-        df (pd.DataFrame): DataFrame a ser dividido em chunks.
-        chunksize (int, optional): Tamanho de cada chunk. Defaults to 10000.
-
-    Yields:
-        pd.DataFrame: Próximo chunk do DataFrame.
-    """
-    try:
-        for df_chunk in (pd.dataframe[i:i + chunksize] for i in range(0, len(pd.dataframe),chunksize)):
-            df_chunk.to_sql()
-    except Exception as e:
-        logging.error(f"Erro na thread: {e}")
-    finally:
-        # Limpar recursos
-        logging.info(f"Thread")  
-
-# Gravar dados no banco:
-# Empresa
     
 def process_and_insert_chunk(df_chunk, conexao, table_name):
     # Conexao (URI)
@@ -325,7 +303,8 @@ try:
                 host=os.getenv('db_host'),
                 user=os.getenv('db_user'),
                 password=os.getenv('db_password'),
-                database=os.getenv('db_name')
+                database=os.getenv('db_name'),
+                use_pure=True
                 #auth_plugin='caching_sha2_password' 
                 )
 
@@ -351,13 +330,13 @@ logging.info(f"Ler arquivos de Empresa")
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS empresa;')
 conexao.commit()
+column_names = ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']
 for e in range(0, len(arquivos_empresa)):
     print('Trabalhando no arquivo: '+arquivos_empresa[e]+' [...]')
-    column_names = ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']
+    logging.info(f"Trabalhando no arquivo: {arquivos_empresa[e]} [...]")
     column_data = {name: [] for name in column_names}
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    empresa = dd.DataFrame(column_data, name='empresa_dataframe', meta={'cnpj_basico': 'object', 'razao_social': 'object', 'natureza_juridica': 'object', 'qualificacao_responsavel': 'object', '': 'object', 'porte_empresa': 'object', 'ente_federativo_responsavel': 'object'}, divisions=divisoes)
     # Reparticionar em 10 partições
  
     extracted_file_path = os.path.join(extracted_files, arquivos_empresa[e])
@@ -371,17 +350,17 @@ for e in range(0, len(arquivos_empresa)):
     # Renomear colunas                     
     empresa.columns = column_names
     # Replace "," por "."
-    if 'capital_social' in empresa.columns:
-        # Apply the transformation if the column exists
-        empresa['capital_social'] = empresa['capital_social'].apply(lambda x: x.replace(',', '.'))
-        empresa['capital_social'] = empresa['capital_social'].astype(float)
-    else:
-        print("A coluna 'capital_social' não existe no DataFrame.")
+    #if 'capital_social' in empresa.columns:
+    #    # Apply the transformation if the column exists
+    #    empresa['capital_social'] = empresa['capital_social'].apply(lambda x: x.replace(',', '.'))
+    #    empresa['capital_social'] = empresa['capital_social'].astype(float)
+    #else:
+    #    print("A coluna 'capital_social' não existe no DataFrame.")
     # Tratamento do arquivo antes de inserir na base:
     empresa = empresa.reset_index()
     del empresa['index']
-
-    for i in chunker(empresa.npartitions):
+    
+    for i in range(empresa.npartitions):
         df_chunk = empresa.get_partition(i)
         process_and_insert_chunk(df_chunk, conexao,'empresa')
 
@@ -443,8 +422,7 @@ for e in range(0, len(arquivos_estabelecimento)):
     column_data = {name: [] for name in column_names}
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    estabelecimento = dd.DataFrame(column_data, 
-                                    name='empresa_dataframe', 
+    estabelecimento = dd.DataFrame(column_data,  
                                     meta={'cnpj_basico': 'object', 
                                         'cnpj_ordem': 'object', 
                                         'cnpj_dv': 'object', 
@@ -543,7 +521,6 @@ for e in range(0, len(arquivos_socios)):
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
     socios = dd.DataFrame(column_data, 
-                            name='empresa_dataframe', 
                             meta={'cnpj_basico': 'object',
                                 'identificador_socio': 'object',
                                 'nome_socio_razao_social': 'object',
@@ -617,7 +594,6 @@ for e in range(0, len(arquivos_simples)):
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
     simples = dd.DataFrame(column_data, 
-                            name='simples_dataframe', 
                             meta={'cnpj_basico': 'object',
                                     'opcao_pelo_simples': 'object',
                                     'data_opcao_simples': 'object',
@@ -681,7 +657,7 @@ for e in range(0, len(arquivos_cnae)):
     column_data = {name: [] for name in column_names}
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    cnae = dd.DataFrame(column_data, name='cnae_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    cnae = dd.DataFrame(column_data, meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
     # Reparticionar em 10 partições
 
     extracted_file_path = os.path.join(extracted_files, arquivos_cnae[e])
@@ -734,7 +710,7 @@ for e in range(0, len(arquivos_moti)):
     column_data = {name: [] for name in column_names}
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    moti = dd.DataFrame(column_data, name='empresa_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    moti = dd.DataFrame(column_data, meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
     # Reparticionar em 10 partições
     try:
         del moti
@@ -790,7 +766,7 @@ for e in range(0, len(arquivos_munic)):
     column_data = {name: [] for name in column_names}
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    munic = dd.DataFrame(column_data, name='empresa_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    munic = dd.DataFrame(column_data, meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
     # Reparticionar em 10 partições    
     try:
         del munic
@@ -845,7 +821,7 @@ for e in range(0, len(arquivos_natju)):
     column_data = {name: [] for name in column_names}
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    natju = dd.DataFrame(column_data, name='natju_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    natju = dd.DataFrame(column_data, meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
     # Reparticionar em 10 partições    
     try:
         del natju
@@ -898,7 +874,7 @@ for e in range(0, len(arquivos_pais)):
     column_data = {name: [] for name in column_names}
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    pais = dd.DataFrame(column_data, name='pais_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    pais = dd.DataFrame(column_data, meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
     # Reparticionar em 10 partições
     try:
         del pais
@@ -953,7 +929,7 @@ for e in range(0, len(arquivos_quals)):
     column_data = {name: [] for name in column_names}
     num_particoes = 10
     divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    quals = dd.DataFrame(column_data, name='quals_dataframe', meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
+    quals = dd.DataFrame(column_data, meta={'codigo': 'object', 'descricao': 'object'}, divisions=divisoes)
     # Reparticionar em 10 partições
     try:
         del quals
