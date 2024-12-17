@@ -98,26 +98,6 @@ def makedirs_custom(path, exist_ok=True, mode=0o755):
         logging.error(f"Erro ao criar diretório {path}: {e}")
     
 
-# %%
-
-def to_sql(dataframe, table_name, connection_uri, if_exists='append', index=False, chunksize=10000):
-    """Insere um DataFrame em uma tabela de banco de dados.
-
-    Args:
-        dataframe (pd.DataFrame): DataFrame a ser inserido.
-        table_name (str): Nome da tabela no banco de dados.
-        connection_uri (str): URI de conexão com o banco de dados.
-        if_exists (str, optional): Ação a ser tomada se a tabela já existir. Defaults to 'append'.
-        index (bool, optional): Se True, inclui o índice do DataFrame na tabela. Defaults to False.
-        chunksize (int, optional): Tamanho dos chunks para inserção. Defaults to 10000.
-    """
-
-    try:
-        logging.info(f"Conectar Banco de dados")
-        to_sql(table_name, connection_uri, if_exists='append', index=index, chunksize=10000)
-    except Exception as e:
-        logging.error(f"Erro ao inserir dados: {e}")
-        print(f"Erro ao inserir dados: {e}")
     
     
 def process_and_insert_chunk(df_chunk, conexao, table_name):
