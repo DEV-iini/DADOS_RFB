@@ -100,7 +100,7 @@ def makedirs_custom(path, exist_ok=True, mode=0o755):
     
 def process_and_insert_chunk(df_chunk, conexao, table_name):
     # Conexao (URI)
-       """Insere um chunk de DataFrame em uma tabela do banco de dados.
+    """Insere um chunk de DataFrame em uma tabela do banco de dados.
 
     Args:
         df_chunk (pd.DataFrame): Chunk de dados a ser inserido.
