@@ -107,14 +107,15 @@ def process_and_insert_chunk(df_chunk, conexao, table_name):
         table_name (str): Nome da tabela no banco de dados.
         connection_string (str): String de conexão com o banco de dados.
     """
-
+    print('Erro')
     try:
         # Cria a engine do SQLAlchemy com a string de conexão
         engine = sqlalchemy.create_engine(conexao)
-
+        print(table_name)
+        print(conexao)
+    
         # Insere o DataFrame no banco de dados
         df_chunk.to_sql(table_name, con=engine, if_exists='append', index=False)
-
         logging.info(f"Dados inseridos com sucesso na tabela {table_name}")
     except sqlalchemy.exc.OperationalError as e:
         logging.error(f"Erro de operação no banco de dados: {e}")
@@ -295,7 +296,7 @@ try:
                 use_pure=True
                 #auth_plugin='caching_sha2_password' 
                 )
-
+    connection_uri = f"mysql+mysqlconnector://{os.getenv('db_user')}:{os.getenv('db_password')}@{os.getenv('db_host')}:{os.getenv('DB_PORT')}/{os.getenv('db_name')}"
     cur = conexao.cursor()
 
 except mysql.connector.Error as e:
@@ -350,7 +351,7 @@ for e in range(0, len(arquivos_empresa)):
     
     for i in range(empresa.npartitions):
         df_chunk = empresa.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'empresa')
+        process_and_insert_chunk(df_chunk, connection_uri,'empresa')
 
     try:
         del empresa
