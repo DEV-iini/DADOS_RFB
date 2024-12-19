@@ -296,7 +296,7 @@ try:
                 #auth_plugin='caching_sha2_password' 
                 )
     cnx = f"mysql+mysqlconnector://{os.getenv('db_user')}:{os.getenv('db_password')}@{os.getenv('db_host')}:{os.getenv('DB_PORT')}/{os.getenv('db_name')}"
-    cur = cnx.cursor()
+    cur = conexao.cursor()
 
 except mysql.connector.Error as e:
     logging.error(f"Erro na thread {e}")
