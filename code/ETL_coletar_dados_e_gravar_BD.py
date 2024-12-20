@@ -317,7 +317,7 @@ i=0
 logging.info(f"Ler arquivos de Empresa")
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS empresa;')
-cnx.commit()
+conexao.commit()
 column_names = ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']
 for e in range(0, len(arquivos_empresa)):
     print('Trabalhando no arquivo: '+arquivos_empresa[e]+' [...]')
