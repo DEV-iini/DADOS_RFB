@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 import bs4 as bs
+import csv
 import dask.dataframe as dd
 import getenv
 import hashlib
@@ -74,10 +75,12 @@ def create_dataframe(data, columns):
     colmns: Uma lista com os nomes das colunas.
 
     Returns:
-    Um DataFrame pandas.
+    Um DataFrame dask.
     """
+    print(f"Tipo de data: {type(data)}")
+    print(f"Tipo de columns: {type(columns)}")
 
-    df = pd.DataFrame(data, columns=columns)
+    df = dd.DataFrame(data, columns=columns)
     return df
 
 def makedirs_custom(path, exist_ok=True, mode=0o755):
@@ -96,33 +99,24 @@ def makedirs_custom(path, exist_ok=True, mode=0o755):
         return True
     except OSError as e:
         logging.error(f"Erro ao criar diretório {path}: {e}")
-     
-    
-def process_and_insert_chunk(df_chunk, conexao, table_name):
-    # Conexao (URI)
-    """Insere um chunk de DataFrame em uma tabela do banco de dados.
-
-    Args:
-        df_chunk (pd.DataFrame): Chunk de dados a ser inserido.
-        table_name (str): Nome da tabela no banco de dados.
-        connection_string (str): String de conexão com o banco de dados.
-    """
-    print('Erro')
-    try:
-        # Cria a engine do SQLAlchemy com a string de conexão
-        engine = sqlalchemy.create_engine(conexao)
         
-    
-        # Insere o DataFrame no banco de dados
-        df_chunk.to_sql(table_name, con=engine, if_exists='append', index=False)
-        logging.info(f"Dados inseridos com sucesso na tabela {table_name}")
-    except sqlalchemy.exc.OperationalError as e:
-        logging.error(f"Erro de operação no banco de dados: {e}")
-    except sqlalchemy.exc.IntegrityError as e:
-        logging.error(f"Violação de integridade: {e}")
+def process_and_insert_chunk(df_chunk, conexao, table_name):
+    # Insere o DataFrame no banco de dados
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute('SET autocommit=0') # Desabilita o autocommit
+            try:
+                df_chunk.to_sql(table_name, con=conexao, if_exists='append', index=False)
+                cursor.execute('COMMIT') # Confirma a transacao
+                logging.info(f"Dados inseridos com sucesso na tabela {table_name}")
+            except Exception as e:
+                cursor.execute('ROLLBACK') # Desfaz a transacao em caso de erro
+                logging.error(f'Erro ao inserir dados: {e}')
+            finally:
+                cursor.execute('SET autocommit=1')  # Reativa o autocommit 
     except Exception as e:
-        logging.error(f"Erro inesperado: {e}")
-
+        logging.error(f'Erro de conexão com o banco de dados: {e}')         
+        
 # %%
 # Ler arquivo de configuração de ambiente # https://dev.to/jakewitcher/using-env-files-for-environment-variables-in-python-applications-55a1
 
@@ -147,7 +141,7 @@ try:
     makedirs_custom(output_files, True, 0o755)
 
     extracted_files = os.getenv('EXTRACTED_FILES_PATH')
-    makedirs_custom(extracted_files)
+    makedirs_custom(extracted_files, True, 0o755)
 
     print('Diretórios definidos: \n' +
           'output_files: ' + str(output_files) + '\n' +
@@ -315,6 +309,8 @@ print("""
 """)
 i=0
 logging.info(f"Ler arquivos de Empresa")
+table_name = 'empresa'
+num_particoes = 10
 # Drop table antes do insert
 cur.execute('DROP TABLE IF EXISTS empresa;')
 conexao.commit()
@@ -322,40 +318,22 @@ column_names = ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificaca
 for e in range(0, len(arquivos_empresa)):
     print('Trabalhando no arquivo: '+arquivos_empresa[e]+' [...]')
     logging.info(f"Trabalhando no arquivo: {arquivos_empresa[e]} [...]")
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições
- 
     extracted_file_path = os.path.join(extracted_files, arquivos_empresa[e])
-    empresa = dd.read_csv(extracted_file_path,
-                          sep=';',
-                          # nrows=100,
-                          skiprows=0,
-                          header=None,
-                          dtype='object',
-                          encoding='latin1')
-    # Renomear colunas                     
-    empresa.columns = column_names
-    # Replace "," por "."
-    #if 'capital_social' in empresa.columns:
-    #    # Apply the transformation if the column exists
-    #    empresa['capital_social'] = empresa['capital_social'].apply(lambda x: x.replace(',', '.'))
-    #    empresa['capital_social'] = empresa['capital_social'].astype(float)
-    #else:
-    #    print("A coluna 'capital_social' não existe no DataFrame.")
-    # Tratamento do arquivo antes de inserir na base:
-    empresa = empresa.reset_index()
-    del empresa['index']
-    
-    for i in range(empresa.npartitions):
-        df_chunk = empresa.get_partition(i)
-        process_and_insert_chunk(df_chunk, cnx,'empresa')
+    column_data = {name: [] for name in column_names}
+    with open(extracted_file_path, 'r', encoding='latin1') as f:
+        reader = csv.reader(f,delimiter=';')
+        for row in reader:
+            for i, col in enumerate(column_names):
+                column_data[col].append(row[i])
 
-    try:
-        del empresa
-    except:
-        pass    
+        # Cria a engine do SQLAlchemy com a string de conexão
+        df = dd.from_pandas(pd.DataFrame(column_data), npartitions=num_particoes)
+        
+    
+        # Insere o DataFrame no banco de dados
+        # Gravar dados no banco:
+
+        process_and_insert_chunk(df, conexao,'empresa')
 
     print('Arquivos de empresa finalizados!')
     empresa_insert_end = time.time()
