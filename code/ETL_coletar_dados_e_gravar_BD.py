@@ -106,7 +106,7 @@ def process_and_insert_chunk(df_chunk, conexao, table_name):
         with conexao.cursor() as cursor:
             cursor.execute('SET autocommit=0') # Desabilita o autocommit
             try:
-                df_chunk.to_sql(table_name, con=conexao, if_exists='append', index=False)
+                df_chunk.to_sql(table_name, conexao, if_exists='append', index=False)
                 cursor.execute('COMMIT') # Confirma a transacao
                 logging.info(f"Dados inseridos com sucesso na tabela {table_name}")
             except Exception as e:
