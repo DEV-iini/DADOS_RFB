@@ -1,0 +1,33 @@
+2024-12-23 01:31:57,777 - INFO - Iniciando o processo de carga
+2024-12-23 01:31:57,778 - INFO - Carregar variáveis de ambiente
+2024-12-23 01:31:57,779 - INFO - Variáveis de ambiente carregadas
+2024-12-23 01:31:57,779 - INFO - Definir diretórios
+2024-12-23 01:31:57,779 - INFO - Retornar valor da variável de ambiente
+2024-12-23 01:31:57,779 - INFO - Criar diretório
+2024-12-23 01:31:57,780 - INFO - Diretório D:\OPERACAO\OUTPUT_FILES criado com sucesso
+2024-12-23 01:31:57,780 - INFO - Retornar valor da variável de ambiente
+2024-12-23 01:31:57,780 - INFO - Criar diretório
+2024-12-23 01:31:57,780 - INFO - Diretório D:\OPERACAO\EXTRACTED_FILES criado com sucesso
+2024-12-23 01:31:57,780 - INFO - Diretórios definidos: output_files: D:\OPERACAO\OUTPUT_FILES, extracted_files: D:\OPERACAO\EXTRACTED_FILES
+2024-12-23 01:31:57,781 - INFO - Obter dados da URL
+2024-12-23 01:31:59,896 - INFO - Extrair arquivos
+2024-12-23 01:31:59,904 - INFO - Arquivos encontrados: []
+2024-12-23 01:31:59,904 - INFO - Baixar arquivos
+2024-12-23 01:31:59,905 - INFO - Fim do Download doa arquivos
+2024-12-23 01:31:59,905 - INFO - Descompactar arquivos
+2024-12-23 01:31:59,905 - INFO - Fim descompactando arquivo
+2024-12-23 01:31:59,905 - INFO - Listar arquivos
+2024-12-23 01:31:59,906 - INFO - LER E INSERIR DADOS
+2024-12-23 01:31:59,906 - INFO - Separar arquivos
+2024-12-23 01:31:59,906 - INFO - Separar arquivos
+2024-12-23 01:31:59,906 - INFO - Acesso ao banco de dados
+2024-12-23 01:31:59,906 - INFO - Conectar ao banco de dados
+2024-12-23 01:32:00,048 - INFO - package: mysql.connector.plugins
+2024-12-23 01:32:00,048 - INFO - plugin_name: caching_sha2_password
+2024-12-23 01:32:00,048 - INFO - AUTHENTICATION_PLUGIN_CLASS: MySQLCachingSHA2PasswordAuthPlugin
+2024-12-23 01:32:00,059 - INFO - Conexão com o banco de dados estabelecida com sucesso
+2024-12-23 01:32:00,093 - INFO - Processar arquivos de empresa
+2024-12-23 01:32:00,094 - INFO - Trabalhando no arquivo: K3241.K03200Y0.D41109.EMPRECSV [...]
+2024-12-23 01:33:15,945 - INFO - Gravar dados no banco empresa
+2024-12-23 01:33:15,950 - INFO - URI de conexao: mysql+mysqlconnector://root:m)IyXIM72({y@localhost:3306/u266818497_dados_rfb
+2024-12-23 01:33:19,172 - INFO - Engine criado com sucesso para empresa

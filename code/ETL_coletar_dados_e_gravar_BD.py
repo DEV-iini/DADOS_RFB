@@ -1,5 +1,7 @@
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy import inspect
+from sqlalchemy.exc import OperationalError, TimeoutError
 import bs4 as bs
 import csv
 import dask.dataframe as dd
@@ -22,13 +24,15 @@ import urllib.request
 import wget
 import zipfile
 
-cnpj_basico=''
-current = 1
-i=0
-# Gerar Log
+# Configuração do logging
 logging.basicConfig(filename='DADOS_RFB.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logging.info(f"Iniciando o processo de carga")
-
+    
+def main():
+    cnpj_basico=''
+    current = 1
+    i=0
+    # Gerar Log
+    logging.info(f"Iniciando o processo de carga")
 def check_diff(url, file_name):
     # Verifica se o arquivo local é idêntico ao arquivo remoto.
     #
@@ -40,6 +44,7 @@ def check_diff(url, file_name):
     #    bool: True se o arquivo precisa ser baixado, False caso contrário.
     #
     try:
+        logging.info(f"Verificar diferença entre o arquivo local e o arquivo remoto")
         response = requests.head(url)
         response.raise_for_status()
     
@@ -47,42 +52,44 @@ def check_diff(url, file_name):
         if os.path.exists(file_name):
             with open(file_name, 'rb') as f:
                 local_hash = hashlib.sha256(f.read()).hexdigest()
-            response = requests.get(url, stream=True)
-            hasher = hashlib.sha256()
-            for chunk in response.iter_content(chunk_size=8192):  
-                hasher.update(chunk)
-            remote_hash = hasher.hexdigest()
-            return local_hash != remote_hash
-        else:
-            return True
-    except requests.exceptions.RequestException as e:
-        print(f"Erro ao verificar o arquivo remoto: {e}")
-        logging.info(f"Erro ao verificar o arquivo remoto")
-        return True
-    except OSError as e:
-        print(f"Erro ao acessar o arquivo local: {e}")
-        logging.info(f"Erro ao acessar o arquivo local")
-        return True
-    finally:
-        response.close
 
-# %%
+            # Verificar se o arquivo remoto é diferente do arquivo local    
+            if os.path.getsize(file_name) != remote_size:
+                logging.info(f"O arquivo remoto: {remote_size} é diferente do arquivo local")
+                return True
+            
+            # Verificar se o hash do arquivo remoto é diferente do arquivo local
+            response = requests.get(url)
+            response.raise_for_status()
+            remote_hash = hashlib.sha256(response.content).hexdigest()
+            if local_hash != remote_hash:
+                logging.info(f"O hash do arquivo remoto é diferente do arquivo local")
+                return True
+        
+        return False
+    
+    except requests.RequestException as e:
+        logging.error(f"Erro ao verificar o arquivo remoto: {e}")
+        print(f"Erro ao verificar o arquivo remoto: {e}")
+        return True
+    
+    except OSError as e:
+        logging.error(f"Erro ao acessar o arquivo local: {e}")
+        print(f"Erro ao acessar o arquivo local: {e}")
+        return True
 def create_dataframe(data, columns):
     """Cria um DataFrame a partir dos dados e colunas fornecidos.
 
     Args:
     data: Uma lista de listas ou um dicionário contendo os dados.
-    colmns: Uma lista com os nomes das colunas.
+    columns: Uma lista com os nomes das colunas.
 
     Returns:
     Um DataFrame dask.
     """
-    print(f"Tipo de data: {type(data)}")
-    print(f"Tipo de columns: {type(columns)}")
-
+    logging.info(f"Criar DataFrame")
     df = dd.DataFrame(data, columns=columns)
     return df
-
 def makedirs_custom(path, exist_ok=True, mode=0o755):
     """Cria diretórios recursivamente com controle de existência e permissões.
 
@@ -94,785 +101,882 @@ def makedirs_custom(path, exist_ok=True, mode=0o755):
     Returns:
         bool: True se o diretório foi criado com sucesso, False caso contrário.
     """
+    logging.info(f"Criar diretório")
     try:
         os.makedirs(path, exist_ok=exist_ok, mode=mode)
+        logging.info(f"Diretório {path} criado com sucesso")
         return True
     except OSError as e:
         logging.error(f"Erro ao criar diretório {path}: {e}")
-        
+        return False
 def process_and_insert_chunk(df_chunk, conexao, table_name):
-    # Insere o DataFrame no banco de dados
+    """
+        Grava dados no banco de dados.
+
+        Args:
+        df_chunk (pd.DataFrame): DataFrame contendo os dados a serem inseridos.
+        conexao (sqlalchemy.engine.base.Engine): Conexão com o banco de dados.
+        table_name (str): Nome da tabela no banco de dados.
+    """
+    logging.info(f"Gravar dados no banco {table_name}")
     try:
-        with conexao.cursor() as cursor:
-            cursor.execute('SET autocommit=0') # Desabilita o autocommit
-            try:
-                df_chunk.to_sql(table_name, conexao, if_exists='append', index=False)
-                cursor.execute('COMMIT') # Confirma a transacao
-                logging.info(f"Dados inseridos com sucesso na tabela {table_name}")
-            except Exception as e:
-                cursor.execute('ROLLBACK') # Desfaz a transacao em caso de erro
-                logging.error(f'Erro ao inserir dados: {e}')
-            finally:
-                cursor.execute('SET autocommit=1')  # Reativa o autocommit 
+        connection_uri = f"mysql+mysqlconnector://{os.getenv('db_user')}:{os.getenv('db_password')}@{os.getenv('db_host')}:{os.getenv('DB_PORT')}/{os.getenv('db_name')}"         
+        logging.info(f'URI de conexao: {connection_uri}')
+
+        # Tentar conectar ao banco de dados
+        try:
+            engine = sqlalchemy.create_engine(connection_uri)
+            logging.info(f'Engine criado com sucesso para {table_name}')
+        except Exception as e:
+            logging.error(f"Erro ao criar Engine para {table_name}: {e}")
+            return
+
+        # Verificar se a conexão foi estabelecida
+        try:
+            with engine.connect() as connection:
+                logging.info(f"Conexão com o banco de dados {table_name} estabelecida com sucesso")
+                
+                # verificar se a tabela existe
+                inspector = inspect(engine)
+                if not inspector.has_table(table_name):
+                    logging.info(f"Tabela {table_name} não existe. Criando tabela.")
+                    df_chunk.head(0).to_sql(table_name, engine, if_exists='replace', index=False)    
+                    logging.info(f"Tabela {table_name} criada com sucesso")
+
+                # Processo para inserir os dados no banco
+                logging.info(f"Processo para inserir os dados no banco {table_name}")
+                df_chunk.to_sql(table_name, engine, if_exists='append', index=False)
+                logging.info(f"Tabela: {table_name} inserido com sucesso no banco de dados")
+
+        except TimeoutError as e:
+            logging.error(f"Erro ao timeout ao banco de dados {table_name}: {e}")
+            print(f"Erro ao timeout ao banco de dados {table_name}: {e}")
+            return
+        except OperationalError as e:
+            logging.error(f"Erro ao operacional ao banco de dados {table_name}: {e}")
+            print(f"Erro ao operacional ao banco de dados {table_name}: {e}")
+            return
+        except Exception as e:
+            logging.error(f"Erro ao conectar ao banco de dados {table_name}: {e}")
+            print(f"Erro ao conectar ao banco de dados {table_name}: {e}")
+            return
     except Exception as e:
-        logging.error(f'Erro de conexão com o banco de dados: {e}')         
-        
-# %%
-# Ler arquivo de configuração de ambiente # https://dev.to/jakewitcher/using-env-files-for-environment-variables-in-python-applications-55a1
-
+        logging.error(f"Erro ao inserir dados na tabela {table_name}: {e}")
+        print(f"Erro ao inserir dados na tabela {table_name}: {e}")
+    finally:
+        logging.info(f"Finalizando processo de inserção de dados na tabela {table_name}")
 def getEnv(env):
+    """
+    Retorna o valor de uma variável de ambiente.
+
+    Args:
+        env (str): Nome da variável de ambiente.
+
+    Returns:
+        str: Valor da variável de ambiente.
+    """
+    logging.info(f"Retornar valor da variável de ambiente")
     return os.getenv(env)
+def load_enviroment(local_env):
+    """Carrega as variáveis de ambiente de um arquivo .env.
 
-# print('Especifique o local do seu arquivo de configuração ".env". Por exemplo: C:\...\Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ\code')
-# C:\Aphonso_C\Git\Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ\code
-local_env = 'D:\\Repositorio\\00-Programacao\\06-DADOS_RFB\\DADOS_RFB\\code'
-dotenv_path = os.path.join(local_env, '.env')
-load_dotenv(dotenv_path=dotenv_path)
+    Args:
+        dotenv_path (str): Caminho completo do arquivo .env.
 
-dados_rf = 'http://localhost:8000'
+    Returns:
+        bool: True se o arquivo foi carregado com sucesso, False caso contrário.
+    """
+    logging.info(f"Carregar variáveis de ambiente")
+    dotenv_path = os.path.join(local_env, '.env')
+    load_dotenv(dotenv_path=dotenv_path)
+    logging.info(f"Variáveis de ambiente carregadas")
+def define_directories():
+    """Define os diretórios de saída e extração dos arquivos.
 
-logging.info(f"Acesso ao site")
-# %%
-# Read details from ".env" file:
-output_files = None
-extracted_files = None
-try:
-    output_files = os.getenv('OUTPUT_FILES_PATH')
-    makedirs_custom(output_files, True, 0o755)
+    Returns:
+        str, str: Caminho dos diretórios de saída e extração dos arquivos.
+    """
+    try:
+        logging.info(f"Definir diretórios")
+        output_files = getEnv('OUTPUT_FILES_PATH')
+        makedirs_custom(output_files, True, 0o755)
+        extracted_files = getEnv('EXTRACTED_FILES_PATH')
+        makedirs_custom(extracted_files, True, 0o755)
 
-    extracted_files = os.getenv('EXTRACTED_FILES_PATH')
-    makedirs_custom(extracted_files, True, 0o755)
+        logging.info(f"Diretórios definidos: output_files: {output_files}, extracted_files: {extracted_files}")
+        print('Diretórios definidos: \n' + 'output_files: ' + str(output_files) + '\n' + 'extracted_files: ' + str(extracted_files))
+        return output_files, extracted_files
+    except OSError as e:
+        logging.error(f"Erro na definição dos diretórios, verifique o arquivo '.env' ou o local informado do seu arquivo de configuração: {e}")
+        raise
+def fetch_data(url):
+    """Obtém os dados de uma URL.
 
-    print('Diretórios definidos: \n' +
-          'output_files: ' + str(output_files) + '\n' +
-          'extracted_files: ' + str(extracted_files))
-except Exception as e:
-    logging.error(f"Erro na definição dos diretórios, verifique o arquivo '.env' ou o local informado do seu arquivo de configuração. {dotenv_path}: {e}")
-    pass
-    
-# %%
-raw_html = urllib.request.urlopen(dados_rf)
-raw_html = raw_html.read()
+    Args:
+        url (str): URL dos dados.
 
-# Formatar página e converter em string
-page_items = bs.BeautifulSoup(raw_html, 'lxml')
-html_str = str(page_items)
+    Returns:
+        str: Dados obtidos da URL.
+    """
+    try:
+        logging.info(f"Obter dados da URL")
+        response = urllib.request.urlopen(url)
+        raw_html = response.read()
+        return raw_html
+    except Exception as e:
+        logging.error(f"Erro ao obter dados da URL {url}: {e}")
+        print(f"Erro ao obter dados da URL {url}: {e}")
+        raise
+def extract_files_from_html(html_str, file_extension='.zip'):
+    """Extrai os arquivos de uma string HTML.
 
-# Obter arquivos
-Files = []
-text = '.zip'
-for m in re.finditer(text, html_str):  # type: ignore
-    i_start = m.start()-40
-    i_end = m.end()
-    i_loc = html_str[i_start:i_end].find('href=')+6  # type: ignore
-    Files.append(html_str[i_start+i_loc:i_end])  # type: ignore
+    Args:
+        html_str (str): String HTML.
+        file_extension (str): Extensão do arquivo a ser procurado.
+    Returns:
+        list: Lista de arquivos extraídos.
+    """
+    try:
+        logging.info(f"Extrair arquivos")
+        page_items = bs.BeautifulSoup(html_str, 'lxml')
+        html_str = str(page_items)
 
-# Correcao do nome dos arquivos devido a mudanca na estrutura do HTML da pagina - 31/07/22 - Aphonso Rafael
-Files_clean = []
-for i in range(len(Files)):
-    if not Files[i].find('.zip">') > -1:
-        Files_clean.append(Files[i])
+        files = []
+        for m in re.finditer(file_extension, html_str):  # type: ignore
+            i_start = m.start() - 40
+            i_end = m.end()
+            file_snippet = html_str[i_start:i_end]
+            # Limpar o nome do arquivo
+            file_name = re.search(r'href="([^"])"', file_snippet)
+            if file_name:
+                files.append(file_name.group(1)) 
+        return files
 
-try:
-    del Files
-except:
-    pass
+    except Exception as e:
+        logging.error(f"Erro ao extrair arquivos da string HTML: {e}")
+        print(f"Erro ao extrair arquivos da string HTML: {e}")
+        raise
+def delete_files_variable():
+    """Deleta a variável Files.
 
-Files = Files_clean
+    Returns:
+        bool: True se a variável foi deletada com sucesso, False caso contrário.
+    """
+    try:
+        logging.info(f"Deletar variável Files")
+        del files
+        return True
+    except Exception as e:
+        logging.error(f"Erro ao deletar a variável Files: {e}")
+        print(f"Erro ao deletar a variável Files: {e}")
+        return False
+def print_files_list(files):
+    """Imprime a lista de arquivos.
 
-print('Arquivos que serão baixados:')
-i_f = 0
-for f in Files:
-    i_f += 1
-    print(str(i_f) + ' - ' + f)
-
-# %%
-########################################################################################################################
-## DOWNLOAD ############################################################################################################
-########################################################################################################################
-# Create this bar_progress method which is invoked automatically from wget:
-
+    Args:
+        Files (list): Lista de arquivos.
+    """
+    try:
+        logging.info(f"Imprimir lista de arquivos")
+        for i, f in enumerate(Files, start=1):
+            print(f'{i} - {f}') 
+    except Exception as e:
+        logging.error(f"Erro ao imprimir a lista de arquivos: {e}")
+        print(f"Erro ao imprimir a lista de arquivos: {e}")
 def bar_progress(current, total, width=80):
     messagem = "Executando: %d%% [%d / %d] bytes - " % (current / total * 100, current, total)
     # Don't use print() as it will print in new line every time.
     sys.stdout.write("\r" + messagem)
     sys.stdout.flush()
+def download_files(Files, base_url, output_files):
+    """Baixa os arquivos de uma lista.
 
-# %%
-# Inicio Download dos arquivos ################################################################
-logging.info(f"Download arquivos")
-print('Baixando arquivo:')
-i_l = 0
-for l in Files:
-    # Download dos arquivos
-    i_l += 1
-    print(str(i_l) + ' - ' + l)
-    url = dados_rf+'/'+l  # type: ignore
-    file_name = os.path.join(output_files, l)
-    if check_diff(url, file_name):
-        wget.download(url, out=output_files, bar=bar_progress)
-logging.info(f"Fim do Download doa arquivos")
-# Fim do Download doa arquivos ######################################################
-# %%
-# Descompactando arquivo ####################################################################################################################################################
-print('Descompactando arquivo:')
-i_l = 0
-logging.info(f"Descompactando arquivo")
-for l in Files:
+    Args:
+        Files (list): Lista de arquivos.
+        output_files (str): Caminho do diretório de saída dos arquivos.
+    """
     try:
-        i_l += 1
-        print(str(i_l) + ' - ' + l)
-        full_path = os.path.join(output_files, l)
-        with zipfile.ZipFile(full_path, 'r') as zip_ref:
-            zip_ref.extractall(extracted_files)
-    except:
-        pass
-logging.info(f"Fim descompactando arquivo")
-# Descompactando arquivo ####################################################################################################################################################
- 
+        logging.info(f"Baixar arquivos")
+        print('Baixando arquivo:')
+        for i, file in enumerate(Files, start=1):
+            print(f'{i} - {file}')
+            url = f'{base_url}/{file}'
+            file_name = os.path.join(output_files, file)
+            if check_diff(url, file_name):
+                try:
+                    wget.download(url, out=output_files, bar=bar_progress)
+                except Exception as e:
+                    logging.error(f"Erro ao baixar o arquivo {file}: {e}")
+                    print(f"Erro ao baixar o arquivo {file}: {e}")
+        logging.info(f"Fim do Download doa arquivos")
+
+    except Exception as e:
+        logging.error(f"Erro ao baixar os arquivos: {e}")
+        print(f"Erro ao baixar os arquivos: {e}")
+def extract_files(Files, output_files, extracted_files):
+    """Descompacta os arquivos de uma lista.
+
+    Args:
+        Files (list): Lista de arquivos.
+        output_files (str): Caminho do diretório de saída dos arquivos.
+        extracted_files (str): Caminho do diretório de extração dos arquivos.
+    """
+    logging.info(f"Descompactar arquivos")
+    print('Descompactando arquivo:')
+    for i, file in enumerate(Files, start=1):
+        try:
+            print(f'{i} - {file}')
+            full_path = os.path.join(output_files, file)
+            with zipfile.ZipFile(full_path, 'r') as zip_ref:
+                zip_ref.extractall(extracted_files)
+        except Exception as e:
+            logging.error(f"Erro ao descompactar os arquivos: {e}")
+                
+    logging.info(f"Fim descompactando arquivo")
+def separar_arquivos(items):
+    """Separa os arquivos em listas de acordo com o nome.
+
+    Args:
+        items (list): Lista de arquivos.
+
+    Returns:
+        list: Listas de arquivos separados.
+    """
+    try:
+        logging.info(f"Separar arquivos")
+        arquivos = {
+            'empresa': [],
+            'estabelecimento': [],
+            'socios': [],
+            'simples': [],
+            'cnae': [],
+            'moti': [],
+            'munic': [],
+            'natju': [],
+            'pais': [],
+            'quals': []
+        }
+        for item in items:
+            if 'EMPRE' in item:
+                arquivos['empresa'].append(item)
+            elif 'ESTABELE' in item:
+                arquivos['estabelecimento'].append(item)
+            elif 'SOCIO' in item:
+                arquivos['socios'].append(item)
+            elif 'SIMPLES' in item:
+                arquivos['simples'].append(item)
+            elif 'CNAE' in item:
+                arquivos['cnae'].append(item)
+            elif 'MOTI' in item:
+                arquivos['moti'].append(item)
+            elif 'MUNIC' in item:
+                arquivos['munic'].append(item)
+            elif 'NATJU' in item:
+                arquivos['natju'].append(item)
+            elif 'PAIS' in item:
+                arquivos['pais'].append(item)
+            elif 'QUALS' in item:
+                arquivos['quals'].append(item)
+            
+        return arquivos
+    except Exception as e:
+        logging.error(f"Erro ao separar os arquivos: {e}")
+        print(f"Erro ao separar os arquivos: {e}")
+        raise
+def connect_to_database():
+    """Conecta ao banco de dados.
+
+    Returns:
+        mysql.connector.connection.MySQLConnection: Conexão com o banco de dados.
+    """
+    try:
+        logging.info(f"Conectar ao banco de dados")
+        conexao = mysql.connector.connect(
+            host=os.getenv('db_host'),
+            user=os.getenv('db_user'),
+            password=os.getenv('db_password'),
+            database=os.getenv('db_name'),
+            use_pure=True
+        )
+        cur = conexao.cursor()
+        logging.info("Conexão com o banco de dados estabelecida com sucesso")
+        return conexao, cur
+    except mysql.connector.Error as e:
+        logging.error(f"Erro ao conectar ao banco de dados: {e}")
+        print(f"Erro ao conectar ao banco de dados: {e}")
+        raise
+def cursor():
+    """Cria um cursor para a conexão com o banco de dados.
+
+    Returns:
+        mysql.connector.cursor.MySQLCursor: Cursor para a conexão com o banco de dados.
+    """
+    try:
+        logging.info(f"Criar cursor")
+        conexao = connect_to_database()
+        cur = conexao.cursor()
+        return cur
+    except mysql.connector.Error as e:
+        logging.error(f"Erro ao criar cursor: {e}")
+        print(f"Erro ao criar cursor: {e}")
+        raise
+def processar_arquivos_empresa(arquivos_empresa, extracted_files, conexao, cur):
+    """Processa os arquivos de empresa.
+
+    Args:
+        arquivos_empresa (list): Lista de arquivos de empresa.
+        extracted_files (str): Caminho do diretório onde os arquivos foram extraídos.
+        conexao (mysql.connector.connection.MySQLConnection): Conexão com o banco de dados.
+        cur (mysql.connector.cursor.MySQLCursor): Cursor para executar comandos SQL.
+    """
+    try:
+        empresa_insert_start = time.time()
+        table_name = 'empresa'
+        num_particoes = 10
+        # Drop table antes do insert
+        cur.execute('DROP TABLE IF EXISTS empresa;')
+        conexao.commit()
+        column_names = ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']
+        logging.info(f"Processar arquivos de empresa")
+        for e in range(0, len(arquivos_empresa)):
+            print(f'Trabalhando no arquivo: {arquivos_empresa[e]} [...]')
+            logging.info(f'Trabalhando no arquivo: {arquivos_empresa[e]} [...]')
+            extracted_file_path = os.path.join(extracted_files, arquivos_empresa[e])
+            column_data = {name: [] for name in column_names}
+            with open(extracted_file_path, 'r', encoding='latin1') as f:
+                reader = csv.reader(f,delimiter=';')
+                for row in reader:
+                    for i, col in enumerate(column_names):
+                        column_data[col].append(row[i])
+
+                # Cria a engine do SQLAlchemy com a string de conexão
+                df = dd.from_pandas(pd.DataFrame(column_data), npartitions=num_particoes)
+                
+                # Insere o DataFrame no banco de dados
+                # Gravar dados no banco:
+                process_and_insert_chunk(df, conexao, 'empresa')
+
+            print('Arquivos de empresa finalizados!')
+            empresa_insert_end = time.time()
+            empresa_Tempo_insert = round((empresa_insert_end - empresa_insert_start))
+            print('Tempo de execução do processo de empresa (em segundos): ' + str(empresa_Tempo_insert))  
+
+    except mysql.connector.Error as e:
+        logging.error(f"Erro ao processar os arquivos de empresa: {e}")
+        print(f"Erro ao processar os arquivos de empresa: {e}")
+        raise
+def processar_arquivos_estabelecimento(arquivos_estabelecimento):
+    """Processa os arquivos de estabelecimento.
+
+    Args:
+        arquivos_estabelecimento (list): Lista de arquivos de estabelecimento.
+    """
+    try:
+        logging.info(f"Processar arquivos de estabelecimento")
+        for e in range(0, len(arquivos_estabelecimento)):
+            print('Trabalhando no arquivo: '+arquivos_estabelecimento[e]+' [...]')
+            logging.info(f"Trabalhando no arquivo: {arquivos_estabelecimento[e]} [...]")
+            extracted_file_path = os.path.join(extracted_files, arquivos_estabelecimento[e])
+            column_data = {name: [] for name in column_names}
+            with open(extracted_file_path, 'r', encoding='latin1') as f:
+                reader = csv.reader(f,delimiter=';')
+                for row in reader:
+                    for i, col in enumerate(column_names):
+                        column_data[col].append(row[i])
+
+                # Cria a engine do SQLAlchemy com a string de conexão
+                df = dd.from_pandas(pd.DataFrame(column_data), npartitions=num_particoes)
+                
+            
+                # Insere o DataFrame no banco de dados
+                # Gravar dados no banco:
+
+                process_and_insert_chunk(df, conexao,'estabelecimento')
+
+            print('Arquivos de estabelecimento finalizados!')
+            estabelecimento_insert_end = time.time()
+            estabelecimento_Tempo_insert = round((estabelecimento_insert_end - estabelecimento_insert_start))
+            print('Tempo de execução do processo de estabelecimento (em segundos): ' + str(estabelecimento_Tempo_insert))  
+
+    except Exception as e:
+        logging.error(f"Erro ao processar os arquivos de estabelecimento: {e}")
+        print(f"Erro ao processar os arquivos de estabelecimento: {e}")
+        raise
+def processar_arquivos_socios(arquivos_socios):
+    """Processa os arquivos de sócios.
+
+    Args:
+        arquivos_socios (list): Lista de arquivos de sócios.
+    """
+    try:
+        logging.info(f"Processar arquivos de sócios")
+        for e in range(0, len(arquivos_socios)):
+            print('Trabalhando no arquivo: '+arquivos_socios[e]+' [...]')
+            logging.info(f"Trabalhando no arquivo: {arquivos_socios[e]} [...]")
+            column_data = {name: [] for name in column_names}
+            num_particoes = 10
+            divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+            # Reparticionar em 10 partições
+
+            extracted_file_path = os.path.join(extracted_files, arquivos_socios[e])
+            socios = dd.read_csv(extracted_file_path,
+                                sep=';',
+                                # nrows=100,
+                                skiprows=0,
+                                header=None,
+                                dtype='object',
+                                encoding='latin1')
+            # Renomear colunas
+            socios.columns = column_names
+            # Tratamento do arquivo antes de inserir na base:
+            socios = socios.reset_index()
+            del socios['index']
+
+            # Gravar dados no banco:
+            # socios
+            for i in range(socios.npartitions):
+                df_chunk = socios.get_partition(i)
+                process_and_insert_chunk(df_chunk, conexao,'socios')
+
+            try:
+                del socios
+            except:
+                pass
+            print('Arquivos de socios finalizados!')
+            socios_insert_end = time.time()
+            socios_Tempo_insert = round((socios_insert_end - socios_insert_start))
+            print('Tempo de execução do processo de sócios (em segundos): ' + str(socios_Tempo_insert))
+
+    except Exception as e:
+        logging.error(f"Erro ao processar os arquivos de sócios: {e}")
+        print(f"Erro ao processar os arquivos de sócios: {e}")
+        raise
+def processar_arquivos_simples(arquivos_simples):
+    """Processa os arquivos de Simples Nacional.
+
+    Args:
+        arquivos_simples (list): Lista de arquivos de Simples Nacional.
+    """
+    try:
+        logging.info(f"Processar arquivos de Simples Nacional")
+        for e in range(0, len(arquivos_simples)):
+            print('Trabalhando no arquivo: '+arquivos_simples[e]+' [...]')
+            logging.info(f"Trabalhando no arquivo: {arquivos_simples[e]} [...]")
+            column_data = {name: [] for name in column_names}
+            num_particoes = 10
+            divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+            # Reparticionar em 10 partições
+
+            extracted_file_path = os.path.join(extracted_files, arquivos_simples[e])
+            simples = dd.read_csv(extracted_file_path,
+                                sep=';',
+                                # nrows=100,
+                                skiprows=0,
+                                header=None,
+                                dtype='object',
+                                encoding='latin1')
+            # Renomear colunas
+            simples.columns = column_names
+            # Tratamento do arquivo antes de inserir na base:
+            simples = simples.reset_index()
+            del simples['index']
+            # Gravar dados no banco:
+            # simples
+            for i in range(simples.npartitions):
+                df_chunk = simples.get_partition(i)
+                process_and_insert_chunk(df_chunk, conexao,'simples')
+
+            try:
+                del simples
+            except:
+                pass
+
+            print('Arquivos do simples finalizados!')
+            simples_insert_end = time.time()
+            simples_Tempo_insert = round((simples_insert_end - simples_insert_start))
+            print('Tempo de execução do processo do Simples Nacional (em segundos): ' + str(simples_Tempo_insert))
+
+    except Exception as e:
+        logging.error(f"Erro ao processar os arquivos de Simples Nacional: {e}")
+        print(f"Erro ao processar os arquivos de Simples Nacional: {e}")
+    processar_arquivos_cnae(arquivos['cnae'], extracted_files, conexao, cur)
+def processar_arquivos_cnae(arquivos_cnae):
+    """Processa os arquivos de CNAE.
+
+    Args:
+        arquivos_cnae (list): Lista de arquivos de CNAE.
+    """
+    try:
+        logging.info(f"Processar arquivos de CNAE")
+        for e in range(0, len(arquivos_cnae)):
+            print('Trabalhando no arquivo: '+arquivos_cnae[e]+' [...]')
+            logging.info(f"Trabalhando no arquivo: {arquivos_cnae[e]} [...]")
+            column_data = {name: [] for name in column_names}
+            num_particoes = 10
+            divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+            # Reparticionar em 10 partições
+
+            extracted_file_path = os.path.join(extracted_files, arquivos_cnae[e])
+            cnae = dd.read_csv(extracted_file_path,
+                                sep=';',
+                                # nrows=100,
+                                skiprows=0,
+                                header=None,
+                                dtype='object',
+                                encoding='latin1')
+            # Renomear colunas
+            cnae.columns = column_names
+
+            # Tratamento do arquivo antes de inserir na base:
+            cnae = cnae.reset_index()
+            del cnae['index']
+
+            # Gravar dados no banco:
+            # cnae
+            for i in range(cnae.npartitions):
+                df_chunk = cnae.get_partition(i)
+                process_and_insert_chunk(df_chunk, conexao,'cnae')
+
+            try:
+                del cnae
+            except:
+                pass
+            print('Arquivos de cnae finalizados!')
+            cnae_insert_end = time.time()
+            cnae_Tempo_insert = round((cnae_insert_end - cnae_insert_start))
+            print('Tempo de execução do processo de cnae (em segundos): ' + str(cnae_Tempo_insert))
+
+    except Exception as e:
+        logging.error(f"Erro ao processar os arquivos de CNAE: {e}")
+        print(f"Erro ao processar os arquivos de CNAE: {e}")
+        raise
+    processar_arquivos_moti(arquivos['moti'], extracted_files, conexao, cur)
+def processar_arquivos_moti(arquivos_moti):
+    """Processa os arquivos de motivos da situação atual.
+
+    Args:
+        arquivos_moti (list): Lista de arquivos de motivos da situação atual.
+    """
+    try:
+        logging.info(f"Processar arquivos de motivos da situação atual")
+        for e in range(0, len(arquivos_moti)):
+            print('Trabalhando no arquivo: '+arquivos_moti[e]+' [...]')
+            logging.info(f"Trabalhando no arquivo: {arquivos_moti[e]} [...]")
+            column_data = {name: [] for name in column_names}
+            num_particoes = 10
+            divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+            # Reparticionar em 10 partições
+
+            extracted_file_path = os.path.join(extracted_files, arquivos_moti[e])
+            moti = dd.read_csv(extracted_file_path,
+                                sep=';',
+                                # nrows=100,
+                                skiprows=0,
+                                header=None,
+                                dtype='object',
+                                encoding='latin1')
+            # Renomear colunas
+            moti.columns = column_names
+
+            # Tratamento do arquivo antes de inserir na base:
+            moti = moti.reset_index()
+            del moti['index']
+
+            # Gravar dados no banco:
+            # moti
+            for i in range(moti.npartitions):
+                df_chunk = moti.get_partition(i)
+                process_and_insert_chunk(df_chunk, conexao,'moti')
+
+            try:
+                del moti
+            except:
+                pass
+            print('Arquivos de moti finalizados!')
+            moti_insert_end = time.time()
+            moti_Tempo_insert = round((moti_insert_end - moti_insert_start))
+            print('Tempo de execução do processo de motivos da situação atual (em segundos): ' +
+                str(moti_Tempo_insert))
+
+    except Exception as e:
+        logging.error(f"Erro ao processar os arquivos de motivos da situação atual: {e}")
+        print(f"Erro ao processar os arquivos de motivos da situação atual: {e}")
+        raise
+def processar_arquivos_munic(arquivos_munic):
+    """Processa os arquivos de municípios.
+
+    Args:
+        arquivos_munic (list): Lista de arquivos de municípios.
+    """
+    try:
+        logging.info(f"Processar arquivos de municípios")
+        for e in range(0, len(arquivos_munic)):
+            print('Trabalhando no arquivo: '+arquivos_munic[e]+' [...]')
+            logging.info(f"Trabalhando no arquivo: {arquivos_munic[e]} [...]")
+            column_data = {name: [] for name in column_names}
+            num_particoes = 10
+            divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+            # Reparticionar em 10 partições
+
+            extracted_file_path = os.path.join(extracted_files, arquivos_munic[e])
+            munic = dd.read_csv(extracted_file_path,
+                                sep=';',
+                                # nrows=100,
+                                skiprows=0,
+                                header=None,
+                                dtype='object',
+                                encoding='latin1')
+            # Renomear colunas
+            munic.columns = column_names
+
+            # Tratamento do arquivo antes de inserir na base:
+            munic = munic.reset_index()
+            del munic['index']
+
+            # Gravar dados no banco:
+            # munic
+            for i in range(munic.npartitions):
+                df_chunk = munic.get_partition(i)
+                process_and_insert_chunk(df_chunk, conexao,'munic')
+
+            try:
+                del munic
+            except:
+                pass
+            print('Arquivos de munic finalizados!')
+            munic_insert_end = time.time()
+            munic_Tempo_insert = round((munic_insert_end - munic_insert_start))
+            print('Tempo de execução do processo de municípios (em segundos): ' +
+                str(munic_Tempo_insert))
+
+    except Exception as e:
+        logging.error(f"Erro ao processar os arquivos de municípios: {e}")
+        print(f"Erro ao processar os arquivos de municípios: {e}")
+        raise
+    processar_arquivos_natju(arquivos['natju'], extracted_files, conexao, cur)
+def processar_arquivos_natju(arquivos_natju):
+    """Processa os arquivos de natureza jurídica.
+
+    Args:
+        arquivos_natju (list): Lista de arquivos de natureza jurídica.
+    """
+    try:
+        logging.info(f"Processar arquivos de natureza jurídica")
+        for e in range(0, len(arquivos_natju)):
+            print('Trabalhando no arquivo: '+arquivos_natju[e]+' [...]')
+            logging.info(f"Trabalhando no arquivo: {arquivos_natju[e]} [...]")
+            column_data = {name: [] for name in column_names}
+            num_particoes = 10
+            divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+            # Reparticionar em 10 partições
+
+            extracted_file_path = os.path.join(extracted_files, arquivos_natju[e])
+            natju = dd.read_csv(extracted_file_path,
+                                sep=';',
+                                # nrows=100,
+                                skiprows=0,
+                                header=None,
+                                dtype='object',
+                                encoding='latin1')
+            # Renomear colunas
+            natju.columns = column_names
+            # Tratamento do arquivo antes de inserir na base:
+            natju = natju.reset_index()
+            del natju['index']
+
+            # Gravar dados no banco:
+            # natju
+            for i in range(natju.npartitions):
+                df_chunk = natju.get_partition(i)
+                process_and_insert_chunk(df_chunk, conexao,'natju')
+
+            print('Arquivos de natju finalizados!')
+            natju_insert_end = time.time()
+            natju_Tempo_insert = round((natju_insert_end - natju_insert_start))
+            print('Tempo de execução do processo de natureza jurídica (em segundos): ' +
+                str(natju_Tempo_insert))
+
+    except Exception as e:
+        logging.error(f"Erro ao processar os arquivos de natureza jurídica: {e}")
+        print(f"Erro ao processar os arquivos de natureza jurídica: {e}")
+        raise
+    processar_arquivos_pais(arquivos['pais'], extracted_files, conexao, cur)
+def processar_arquivos_pais(arquivos_pais):
+    """Processa os arquivos de país.
+
+    Args:
+        arquivos_pais (list): Lista de arquivos de país.
+    """
+    try:
+        logging.info(f"Processar arquivos de país")
+        for e in range(0, len(arquivos_pais)):
+            print('Trabalhando no arquivo: '+arquivos_pais[e]+' [...]')
+            logging.info(f"Trabalhando no arquivo: {arquivos_pais[e]} [...]")
+            column_data = {name: [] for name in column_names}
+            num_particoes = 10
+            divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+            # Reparticionar em 10 partições
+
+            extracted_file_path = os.path.join(extracted_files, arquivos_pais[e])
+            pais = dd.read_csv(extracted_file_path, 
+                                sep=';',
+                                skiprows=0, 
+                                header=None, 
+                                dtype='object', 
+                                encoding='latin1')
+            # Renomear colunas
+            pais.columns = column_names
+            # Tratamento do arquivo antes de inserir na base:
+            pais = pais.reset_index()
+            del pais['index']
+
+            # Gravar dados no banco:
+            # pais
+            for i in range(pais.npartitions):
+                df_chunk = pais.get_partition(i)
+                process_and_insert_chunk(df_chunk, conexao,'pais')
+
+            try:
+                del pais
+            except:
+                pass
+            print('Arquivos de pais finalizados!')
+            pais_insert_end = time.time()
+            pais_Tempo_insert = round((pais_insert_end - pais_insert_start))
+            print('Tempo de execução do processo de país (em segundos): ' + str(pais_Tempo_insert))
+
+    except Exception as e:
+        logging.error(f"Erro ao processar os arquivos de país: {e}")
+        print(f"Erro ao processar os arquivos de país: {e}")
+        raise
+def processar_arquivos_qual(arquivos_qual):
+    """Processa os arquivos de qualificação de sócios.
+
+    Args:
+        arquivos_qual (list): Lista de arquivos de qualificação de sócios.
+    """
+    try:
+        logging.info(f"Processar arquivos de qualificação de sócios")
+        for e in range(0, len(arquivos_qual)):
+            print('Trabalhando no arquivo: '+arquivos_qual[e]+' [...]')
+            logging.info(f"Trabalhando no arquivo: {arquivos_qual[e]} [...]")
+            column_data = {name: [] for name in column_names}
+            num_particoes = 10
+            divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
+            # Reparticionar em 10 partições
+
+            extracted_file_path = os.path.join(extracted_files, arquivos_qual[e])
+            qual = dd.read_csv(extracted_file_path, 
+                                sep=';',
+                                skiprows=0, 
+                                header=None, 
+                                dtype='object', 
+                                encoding='latin1')
+            # Renomear colunas
+            qual.columns = column_names
+            # Tratamento do arquivo antes de inserir na base:
+            qual = qual.reset_index()
+            del qual['index']
+
+            # Gravar dados no banco:
+            # qual
+            for i in range(qual.npartitions):
+                df_chunk = qual.get_partition(i)
+                process_and_insert_chunk(df_chunk, conexao,'qual')
+
+            try:
+                del qual
+            except:
+                pass
+            print('Arquivos de qual finalizados!')
+            qual_insert_end = time.time()
+            qual_Tempo_insert = round((qual_insert_end - qual_insert_start))
+            print('Tempo de execução do processo de qualificação de sócios (em segundos): ' + str(qual_Tempo_insert))
+
+    except Exception as e:
+        logging.error(f"Erro ao processar os arquivos de qualificação de sócios: {e}")
+        print(f"Erro ao processar os arquivos de qualificação de sócios: {e}")
+        raise
+def listar_arquivos(diretorio):
+    """Lista os arquivos de um diretório.
+
+    Args:
+        diretorio (str): Caminho do diretório.
+
+    Returns:
+        list: Lista de arquivos.
+    """
+    try:
+        logging.info(f"Listar arquivos")
+        return [name for name in os.listdir(diretorio) if os.path.isfile(os.path.join(diretorio, name))]
+    except Exception as e:
+        logging.error(f"Erro ao listar os arquivos: {e}")
+        print(f"Erro ao listar os arquivos: {e}")
+        raise
+
+logging.info(f"Iniciando o processo de carga")
+# Definir diretórios    
+local_env = 'D:\\Repositorio\\00-Programacao\\06-DADOS_RFB\\DADOS_RFB\\code'
+load_enviroment(local_env)
+
+# Definir diretórios
+output_files, extracted_files = define_directories()
+
+# Acessar o site e obter o conteúdo HTML
+dados_rf = 'http://localhost:8000'
+raw_html = fetch_data(dados_rf)
+
+# Extrair arquivos do HTML
+Files = extract_files_from_html(raw_html)
+
+logging.info(f"Arquivos encontrados: {Files}")
 # %%
-########################################################################################################################
-## LER E INSERIR DADOS #################################################################################################
-########################################################################################################################
+# Read details from ".env" file:
+
+# Download dos arquivos
+download_files(Files, dados_rf, output_files)
+
+# Descompactação dos arquivos
+extract_files(Files, output_files, extracted_files)
+
+# Listar os arquivos no diretório
+items = listar_arquivos(extracted_files)
+
+# Iniciar o processo de leitura e inserção dos dados
 insert_start = time.time()
 logging.info(f"LER E INSERIR DADOS")
-# Files:
-Items = [name for name in os.listdir(extracted_files) if name.endswith('')]
 
-# Separar arquivos:
-logging.info('Separar arquivos')
-arquivos_empresa = []
-arquivos_estabelecimento = []
-arquivos_socios = []
-arquivos_simples = []
-arquivos_cnae = []
-arquivos_moti = []
-arquivos_munic = []
-arquivos_natju = []
-arquivos_pais = []
-arquivos_quals = []
-for i in range(len(Items)):
-    if Items[i].find('EMPRE') > -1:
-        arquivos_empresa.append(Items[i])
-    elif Items[i].find('ESTABELE') > -1:
-        arquivos_estabelecimento.append(Items[i])
-    elif Items[i].find('SOCIO') > -1:
-        arquivos_socios.append(Items[i])
-    elif Items[i].find('SIMPLES') > -1:
-        arquivos_simples.append(Items[i])
-    elif Items[i].find('CNAE') > -1:
-        arquivos_cnae.append(Items[i])
-    elif Items[i].find('MOTI') > -1:
-        arquivos_moti.append(Items[i])
-    elif Items[i].find('MUNIC') > -1:
-        arquivos_munic.append(Items[i])
-    elif Items[i].find('NATJU') > -1:
-        arquivos_natju.append(Items[i])
-    elif Items[i].find('PAIS') > -1:
-        arquivos_pais.append(Items[i])
-    elif Items[i].find('QUALS') > -1:
-        arquivos_quals.append(Items[i])
-    else:
-        pass
+# Separar os arquivos em listas de acordo com o nome
+logging.info(f"Separar arquivos")
+arquivos = separar_arquivos(items)
 
-# %%
-# Conectar no banco de dados:
-# Dados da conexão com o BD
-logging.info(f"Acesso Banco de dados")
+# Acesso ao banco de dados
+logging.info("Acesso ao banco de dados")
+conexao, cur = connect_to_database()
 
-try:
-    conexao = mysql.connector.connect(
-                host=os.getenv('db_host'),
-                user=os.getenv('db_user'),
-                password=os.getenv('db_password'),
-                database=os.getenv('db_name'),
-                use_pure=True
-                #auth_plugin='caching_sha2_password' 
-                )
-    cnx = f"mysql+mysqlconnector://{os.getenv('db_user')}:{os.getenv('db_password')}@{os.getenv('db_host')}:{os.getenv('DB_PORT')}/{os.getenv('db_name')}"
-    cur = conexao.cursor()
-
-except mysql.connector.Error as e:
-    logging.error(f"Erro na thread {e}")
-    print(f"Erro na thread: {e}")
-    logging.info(f"Conexao falhou")
-
-
-
-# %%
-# Arquivos de empresa:
-empresa_insert_start = time.time()
-print("""
-#########################
-## Arquivos de EMPRESA:  ##
-#########################
-""")
-i=0
-logging.info(f"Ler arquivos de Empresa")
-table_name = 'empresa'
-num_particoes = 10
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS empresa;')
-conexao.commit()
-column_names = ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']
-for e in range(0, len(arquivos_empresa)):
-    print('Trabalhando no arquivo: '+arquivos_empresa[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_empresa[e]} [...]")
-    extracted_file_path = os.path.join(extracted_files, arquivos_empresa[e])
-    column_data = {name: [] for name in column_names}
-    with open(extracted_file_path, 'r', encoding='latin1') as f:
-        reader = csv.reader(f,delimiter=';')
-        for row in reader:
-            for i, col in enumerate(column_names):
-                column_data[col].append(row[i])
-
-        # Cria a engine do SQLAlchemy com a string de conexão
-        df = dd.from_pandas(pd.DataFrame(column_data), npartitions=num_particoes)
-        
+if conexao is None or cur is None:
+    logging.info("Conexão falhou")
+else:
+    # Processar arquivos de empresa
+    processar_arquivos_empresa(arquivos['empresa'], extracted_files, conexao, cur)
+    processar_arquivos_estabelecimento(arquivos['estabelecimento'], extracted_files, conexao, cur)
+    processar_arquivos_socios(arquivos['socios'], extracted_files, conexao, cur)
+    processar_arquivos_simples(arquivos['simples'], extracted_files, conexao, cur)
+    processar_arquivos_cnae(arquivos['cnae'], extracted_files, conexao, cur)
+    processar_arquivos_moti(arquivos['moti'], extracted_files, conexao, cur)
+    processar_arquivos_munic(arquivos['munic'], extracted_files, conexao, cur)
+    processar_arquivos_natju(arquivos['natju'], extracted_files, conexao, cur)
+    processar_arquivos_pais(arquivos['pais'], extracted_files, conexao, cur)
+    processar_arquivos_qual(arquivos['quals'], extracted_files, conexao, cur)
+    logging.info(f"Processo de carga dos arquivos finalizado")
     
-        # Insere o DataFrame no banco de dados
-        # Gravar dados no banco:
-
-        process_and_insert_chunk(df, conexao,'empresa')
-
-    print('Arquivos de empresa finalizados!')
-    empresa_insert_end = time.time()
-    empresa_Tempo_insert = round((empresa_insert_end - empresa_insert_start))
-    print('Tempo de execução do processo de empresa (em segundos): ' + str(empresa_Tempo_insert))  
-
-# %%
-# Arquivos de estabelecimento:
-estabelecimento_insert_start = time.time()
-print("""
-####################################
-### Arquivos de ESTABELECIMENTO: ###
-####################################
-""")
-i=0
-logging.info(f"Ler arquivos de Estabelecimento")
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS estabelecimento;')
-conexao.commit()
-column_names = ['cnpj_basico', 
-                    'cnpj_ordem', 
-                    'cnpj_dv', 
-                    'identificador_matriz_filial', 
-                    'nome_fantasia', 
-                    'situacao_cadastral', 
-                    'data_situacao_cadastral', 
-                    'motivo_situacao_cadastral', 
-                    'nome_cidade_exterior',
-                    'pais',
-                    'data_inicio_atividade',
-                    'cnae_fiscal_principal',
-                    'cnae_fiscal_secundaria',
-                    'tipo_logradouro',
-                    'logradouro',
-                    'numero',
-                    'complemento',
-                    'bairro',
-                    'cep',
-                    'uf',
-                    'municipio',
-                    'ddd_1',
-                    'telefone_1',
-                    'ddd_2',
-                    'telefone_2',
-                    'ddd_fax',
-                    'fax',
-                    'correio_eletronico',
-                    'situacao_especial',
-                    'data_situacao_especial']
-for e in range(0, len(arquivos_estabelecimento)):
-    print('Trabalhando no arquivo: '+arquivos_estabelecimento[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_estabelecimento[e]} [...]")
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições
-                  
-    extracted_file_path = os.path.join(extracted_files, arquivos_estabelecimento[e])
-    estabelecimento = dd.read_csv(extracted_file_path,
-                                  sep=';',
-                                  # nrows=100,
-                                  skiprows=0,
-                                  header=None,
-                                  dtype='object',
-                                  encoding='latin1')
-    # Renomear Colunas
-    estabelecimento.columns = column_names
-
-    # Tratamento do arquivo antes de inserir na base:
-    estabelecimento = estabelecimento.reset_index()
-    del estabelecimento['index']
-
-    # Gravar dados no banco:
-    # estabelecimento
-    for i in range(estabelecimento.npartitions):
-        df_chunk = estabelecimento.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'estabelecimento')
-
-    try:
-        del estabelecimento
-    except:
-        pass
+    insert_end = time.time()
+    Tempo_insert = round(insert_end - insert_start)
+    print('Tempo total de execução do processo de carga (em segundos): ' + str(Tempo_insert))
     
-    print('Arquivos de estabelecimento finalizados!')
-    estabelecimento_insert_end = time.time()
-    estabelecimento_Tempo_insert = round((estabelecimento_insert_end - estabelecimento_insert_start))
-    print('Tempo de execução do processo de estabelecimento (em segundos): ' + str(estabelecimento_Tempo_insert))
-
-# %%
-# Arquivos de socios:
-socios_insert_start = time.time()
-print("""
-#########################
-## Arquivos de SOCIOS: ##
-#########################
-""")
-i=0
-logging.info(f"Ler arquivos de Socios")
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS socios;')
-conexao.commit()
-column_names = ['cnpj_basico',
-                'identificador_socio',
-                'nome_socio_razao_social',
-                'cpf_cnpj_socio',
-                'qualificacao_socio',
-                'data_entrada_sociedade',
-                'pais',
-                'representante_legal',
-                'nome_do_representante',
-                'qualificacao_representante_legal',
-                'faixa_etaria']
-for e in range(0, len(arquivos_socios)):
-    print('Trabalhando no arquivo: '+arquivos_socios[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_socios[e]} [...]")                  
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições
-
-    extracted_file_path = os.path.join(extracted_files, arquivos_socios[e])
-    socios = dd.read_csv(extracted_file_path,
-                         sep=';',
-                         # nrows=100,
-                         skiprows=0,
-                         header=None,
-                         dtype='object',
-                         encoding='latin1')
-    # Renomear colunas
-    socios.columns = column_names
-    # Tratamento do arquivo antes de inserir na base:
-    socios = socios.reset_index()
-    del socios['index']
-
-    # Gravar dados no banco:
-    # socios
-    for i in range(socios.npartitions):
-        df_chunk = socios.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'socios')
-
-    try:
-        del socios
-    except:
-        pass
-        print('Arquivos de socios finalizados!')
-        socios_insert_end = time.time()
-        socios_Tempo_insert = round((socios_insert_end - socios_insert_start))
-        print('Tempo de execução do processo de sócios (em segundos): ' + str(socios_Tempo_insert))
-
-# %%
-# Arquivos de simples:
-simples_insert_start = time.time()
-print("""
-###################################
-## Arquivos do SIMPLES NACIONAL: ##
-###################################
-""")
-i=0
-logging.info(f"Ler arquivos de Simples Nacional")
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS simples;')
-conexao.commit()
-column_names = ['cnpj_basico',
-                'opcao_pelo_simples',
-                'data_opcao_simples',
-                'data_exclusao_simples',
-                'opcao_mei',
-                'data_opcao_mei',
-                'data_exclusao_mei']
-
-for e in range(0, len(arquivos_simples)):
-    print('Trabalhando no arquivo: '+arquivos_simples[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_simples[e]} [...]")    
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições
-
-    # Verificar tamanho do arquivo:
-    print('Lendo o arquivo ' + arquivos_simples[e]+' [...]')
-    extracted_file_path = os.path.join(extracted_files, arquivos_simples[e])
-    simples = dd.read_csv(extracted_file_path,
-                        sep=';',
-                        #nrows=nrows,
-                        skiprows=0,
-                        header=None,
-                        dtype='object',
-                        encoding='latin1')
-    # Renomear colunas
-    simples.columns = column_names 
-    # Tratamento do arquivo antes de inserir na base:
-    simples = simples.reset_index()
-    del simples['index']
-    # Gravar dados no banco:
-    # simples
-    for i in range(simples.npartitions):
-        df_chunk = simples.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'simples')
-
-    try:
-        del simples
-    except:
-        pass
-
-    print('Arquivos do simples finalizados!')
-    simples_insert_end = time.time()
-    simples_Tempo_insert = round((simples_insert_end - simples_insert_start))
-    print('Tempo de execução do processo do Simples Nacional (em segundos): ' + str(simples_Tempo_insert))
-
-# %%
-# Arquivos de cnae:
-cnae_insert_start = time.time()
-print("""
-#######################
-## Arquivos de cnae: ##
-#######################
-""")
-i=0
-logging.info(f"Ler arquivos de CNAE")
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS cnae;')
-conexao.commit()
-column_names = ['codigo', 'descricao']
-for e in range(0, len(arquivos_cnae)):
-    print('Trabalhando no arquivo: '+arquivos_cnae[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_cnae[e]} [...]")    
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições
-
-    extracted_file_path = os.path.join(extracted_files, arquivos_cnae[e])
-    cnae = dd.read_csv(extracted_file_path,
-                        sep=';',
-                        # nrows=100,
-                        skiprows=0,
-                        header=None,
-                        dtype='object',
-                        encoding='latin1')
-    # Renomear colunas
-    cnae.columns = column_names
-
-    # Tratamento do arquivo antes de inserir na base:
-    cnae = cnae.reset_index()
-    del cnae['index']
+    index_start = time.time()
     
-    # Gravar dados no banco:
-    # cnae
-    for i in range(cnae.npartitions):
-        df_chunk = cnae.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'cnae')
-
-    try:
-        del cnae
-    except:
-        pass
-    print('Arquivos de cnae finalizados!')
-    cnae_insert_end = time.time()
-    cnae_Tempo_insert = round((cnae_insert_end - cnae_insert_start))
-    print('Tempo de execução do processo de cnae (em segundos): ' + str(cnae_Tempo_insert))
-
-
-# %%
-# Arquivos de moti:
-moti_insert_start = time.time()
-print("""
-############################################
-## Arquivos de motivos da situação atual: ##
-############################################
-""")
-i=0
-logging.info(f"Ler arquivos de Situacao Atual")
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS moti;')
-conexao.commit()
-column_names = ['codigo', 'descricao']
-for e in range(0, len(arquivos_moti)):
-    print('Trabalhando no arquivo: '+arquivos_moti[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_moti[e]} [...]")
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições
-
-    extracted_file_path = os.path.join(extracted_files, arquivos_moti[e])
-    moti = dd.read_csv(extracted_file_path,
-                        sep=';',
-                        skiprows=0, 
-                        header=None, 
-                        dtype='object', 
-                        encoding='latin1')
-    # Renomear colunas
-    moti.columns = column_names
-
-    # Tratamento do arquivo antes de inserir na base:
-    moti = moti.reset_index()
-    del moti['index']
-
-    # Gravar dados no banco:
-    # moti
-    for i in range(moti.npartitions):
-        df_chunk = moti.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'moti')
-
-    try:
-        del moti
-    except:
-        pass
-
-    print('Arquivos de moti finalizados!')
-    moti_insert_end = time.time()
-    moti_Tempo_insert = round((moti_insert_end - moti_insert_start))
-    print('Tempo de execução do processo de motivos da situação atual (em segundos): ' +
-      str(moti_Tempo_insert))
-
-# %%
-# Arquivos de munic:
-munic_insert_start = time.time()
-print("""
-##########################
-## Arquivos de municípios:
-##########################
-""")
-i=0
-logging.info(f"Ler arquivos de Municipios")
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS munic;')
-conexao.commit()
-column_names = ['codigo', 'descricao']
-for e in range(0, len(arquivos_munic)):
-    print('Trabalhando no arquivo: '+arquivos_munic[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_munic[e]} [...]")
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições    
-
-    extracted_file_path = os.path.join(extracted_files, arquivos_munic[e])
-    munic = dd.read_csv(extracted_file_path, 
-                        sep=';',
-                        skiprows=0, 
-                        header=None, 
-                        dtype='object', 
-                        encoding='latin1')
-    # Renomear colunas
-    munic.columns = column_names
-    
-    # Tratamento do arquivo antes de inserir na base:
-    munic = munic.reset_index()
-    del munic['index']
-
-    # Gravar dados no banco:
-    # munic
-    for i in range(munic.npartitions):
-        df_chunk = munic.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'munic')
-
-    try:
-        del munic
-    except:
-        pass
-    print('Arquivos de munic finalizados!')
-    munic_insert_end = time.time()
-    munic_Tempo_insert = round((munic_insert_end - munic_insert_start))
-    print('Tempo de execução do processo de municípios (em segundos): ' +
-      str(munic_Tempo_insert))
-
-# %%
-# Arquivos de natju:
-natju_insert_start = time.time()
-print("""
-####################################
-## Arquivos de natureza jurídica: ##
-####################################
-""")
-logging.info(f"Ler arquivos de Natureza Juridica")
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS natju;')
-conexao.commit()
-column_names = ['codigo', 'descricao']
-for e in range(0, len(arquivos_natju)):
-    print('Trabalhando no arquivo: '+arquivos_natju[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_natju[e]} [...]")
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições    
-
-    extracted_file_path = os.path.join(extracted_files, arquivos_natju[e])
-    natju = dd.read_csv(extracted_file_path, 
-                        sep=';',
-                        skiprows=0, 
-                        header=None, 
-                        dtype='object', 
-                        encoding='latin1')
-
-    # Renomear colunas
-    natju.columns = column_names
-    # Tratamento do arquivo antes de inserir na base:
-    natju = natju.reset_index()
-    del natju['index']
-
-    # Gravar dados no banco:
-    # natju
-    for i in range(natju.npartitions):
-        df_chunk = natju.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'natju')     
-
-
-    print('Arquivos de natju finalizados!')
-    natju_insert_end = time.time()
-    natju_Tempo_insert = round((natju_insert_end - natju_insert_start))
-    print('Tempo de execução do processo de natureza jurídica (em segundos): ' +
-      str(natju_Tempo_insert))
-
-# %%
-# Arquivos de pais:
-pais_insert_start = time.time()
-print("""
-#######################
-## Arquivos de país: ##
-#######################
-""")
-i=0
-logging.info(f"Ler arquivos de PAIS")
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS pais;')
-conexao.commit()
-column_names = ['codigo', 'descricao']
-for e in range(0, len(arquivos_pais)):
-    print('Trabalhando no arquivo: '+arquivos_pais[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_pais[e]} [...]")
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições
-
-    extracted_file_path = os.path.join(extracted_files, arquivos_pais[e])
-    pais = dd.read_csv(extracted_file_path, 
-                        sep=';',
-                        skiprows=0, 
-                        header=None, 
-                        dtype='object', 
-                        encoding='latin1')
-    # Renomear colunas
-    pais.columns = column_names
-    # Tratamento do arquivo antes de inserir na base:
-    pais = pais.reset_index()
-    del pais['index']
-
-    # Gravar dados no banco:
-    # pais
-    for i in range(pais.npartitions):
-        df_chunk = pais.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'pais')
-
-    try:
-        del pais
-    except:
-        pass
-    print('Arquivos de pais finalizados!')
-    pais_insert_end = time.time()
-    pais_Tempo_insert = round((pais_insert_end - pais_insert_start))
-    print('Tempo de execução do processo de país (em segundos): ' + str(pais_Tempo_insert))
-
-# %%
-# Arquivos de qualificação de sócios:
-quals_insert_start = time.time()
-print("""
-#########################################
-## Arquivos de qualificação de sócios: ##
-#########################################
-""")
-i=0
-logging.info(f"Ler arquivos de Qualificacao de Socios")
-# Drop table antes do insert
-cur.execute('DROP TABLE IF EXISTS quals;')
-conexao.commit()
-column_names = ['codigo', 'descricao']
-for e in range(0, len(arquivos_quals)):
-    print('Trabalhando no arquivo: '+arquivos_quals[e]+' [...]')
-    logging.info(f"Trabalhando no arquivo: {arquivos_quals[e]} [...]")
-    column_data = {name: [] for name in column_names}
-    num_particoes = 10
-    divisoes = np.linspace(0, 10000, num=num_particoes + 1).tolist()
-    # Reparticionar em 10 partições
-
-    extracted_file_path = os.path.join(extracted_files, arquivos_quals[e])
-    quals = dd.read_csv(extracted_file_path, 
-                            sep=';',
-                            skiprows=0, 
-                            header=None, 
-                            dtype='object', 
-                            encoding='latin1')
-    # Renomear colunas
-    quals.columns = column_names
-    # Tratamento do arquivo antes de inserir na base:
-    quals = quals.reset_index()
-    del quals['index']
-
-    # Gravar dados no banco:
-    # quals
-    for i in range(quals.npartitions):
-        df_chunk = quals.get_partition(i)
-        process_and_insert_chunk(df_chunk, conexao,'quals')
-
-    try:
-        del quals
-    except:
-        pass
-    print('Arquivos de quals finalizados!')
-    quals_insert_end = time.time()
-    quals_Tempo_insert = round((quals_insert_end - quals_insert_start))
-    print('Tempo de execução do processo de qualificação de sócios (em segundos): ' + str(quals_Tempo_insert))
-
-
-# %%
-insert_end = time.time()
-Tempo_insert = round((insert_end - insert_start))
-
-print("""
-#############################################
-## Processo de carga dos arquivos finalizado!
-#############################################
-""")
-logging.info(f"Processo de carga dos arquivos finalizado")
-# Tempo de execução do processo (em segundos): 17.770 (4hrs e 57 min)
-print('Tempo total de execução do processo de carga (em segundos): ' + str(Tempo_insert))
-
-
-# %%
-# Criar índices na base de dados:
-index_start = time.time()
-print("""
-#######################################
-## Criar índices na base de dados [...]
-#######################################
-""")
-if cnpj_basico!="":
+    # Criação de índices
     cur.execute('CREATE INDEX empresa_cnpj ON empresa(cnpj_basico);')
     cur.execute('conexao.commit;')
     cur.execute('CREATE INDEX estabelecimento_cnpj ON estabelecimento(cnpj_basico);')
@@ -882,21 +986,10 @@ if cnpj_basico!="":
     cur.execute('CREATE INDEX simples_cnpj ON simples(cnpj_basico);')
     cur.execute('conexao.commit;')
     conexao.commit()
-    print("""
-    ############################################################
-    ## Índices criados nas tabelas, para a coluna `cnpj_basico`:
-    - empresa
-    - estabelecimento
-    - socios
-    - simples
-    ############################################################
-    """)
+    
     index_end = time.time()
     index_time = round(index_end - index_start)
     print('Tempo para criar os índices (em segundos): ' + str(index_time))
-    # Encerramento da thread (exemplo simplificado)
-    cur.close()
-    cnx.close()
     # %%
     print("""Processo 100% finalizado! Você já pode usar seus dados no BD!
      - Desenvolvido por: Aphonso Henrique do Amaral Rafael
