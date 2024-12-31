@@ -373,8 +373,15 @@ def connect_to_database(max_retries=3, delay=5):
                 database=os.getenv('db_name'),
                 use_pure=True
             )
-            logging.info(
-                "Conexão com o banco de dados estabelecida com sucesso")
+            logging.info("Conexão com o banco de dados estabelecida com sucesso")
+            logging.info(f"Versão do banco de dados: {conexao.get_server_info()}")  
+            logging.info(f"Conexão ao banco de dados: {conexao.is_connected()}")
+            logging.info(f"Host: {conexao.server_host}")
+            logging.info(f"Database: {conexao.database}")
+            logging.info(f"User: {conexao.user}")
+
+            logging.info(f"Protocol: {conexao.connection_id}")
+
             return conexao
         except mysql.connector.Error as e:
             logging.error(f"Erro ao conectar ao banco de dados: {e}")
