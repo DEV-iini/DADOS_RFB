@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 import bs4 as bs
 import csv
 import dask.dataframe as dd
-import getenv
 import hashlib
 import logging
 import lxml
@@ -76,7 +75,6 @@ def check_diff(url, file_name):
         logging.error(f"Erro ao acessar o arquivo local: {e}")
         return True
 
-
 def create_dataframe(data, columns):
     """Cria um DataFrame a partir dos dados e colunas fornecidos.
 
@@ -90,7 +88,6 @@ def create_dataframe(data, columns):
     logging.info(f"Criar DataFrame")
     df = dd.DataFrame(data, columns=columns)
     return df
-
 
 def makedirs_custom(path, exist_ok=True, mode=0o755):
     """Cria diretórios recursivamente com controle de existência e permissões.
@@ -112,7 +109,6 @@ def makedirs_custom(path, exist_ok=True, mode=0o755):
         logging.error(f"Erro ao criar diretório {path}: {e}")
         return False
 
-
 def getEnv(env):
     """
     Retorna o valor de uma variável de ambiente.
@@ -126,7 +122,6 @@ def getEnv(env):
     logging.info(f"Retornar valor da variável de ambiente {env}")
     return os.getenv(env)
 
-
 def load_enviroment(local_env):
     """Carrega as variáveis de ambiente de um arquivo .env.
 
@@ -138,9 +133,8 @@ def load_enviroment(local_env):
     """
     logging.info(f"Carregar variáveis de ambiente")
     dotenv_path = os.path.join(local_env, '.env')
-    load_dotenv(dotenv_path=dotenv_path)
+    load_dotenv()
     logging.info(f"Variáveis de ambiente carregadas {dotenv_path}")
-
 
 def define_directories():
     """Define os diretórios de saída e extração dos arquivos.
@@ -163,7 +157,6 @@ def define_directories():
             f"Erro na definição dos diretórios, verifique o arquivo '.env' ou o local informado do seu arquivo de configuração: {e}")
         raise
 
-
 def fetch_data(url):
     """Obtém os dados de uma URL.
 
@@ -181,7 +174,6 @@ def fetch_data(url):
     except Exception as e:
         logging.error(f"Erro ao obter dados da URL {url}: {e}")
         raise
-
 
 def extract_files_from_html(html_str, file_extension='.zip'):
     """Extrai os arquivos de uma string HTML.
@@ -209,7 +201,6 @@ def extract_files_from_html(html_str, file_extension='.zip'):
         logging.error(f"Erro ao extrair arquivos da string HTML: {e}")
         raise
 
-
 def delete_files_variable():
     """Deleta a variável Files.
 
@@ -224,7 +215,6 @@ def delete_files_variable():
         logging.error(f"Erro ao deletar a variável Files: {e}")
         return False
 
-
 def print_files_list(files):
     """Imprime a lista de arquivos.
 
@@ -238,14 +228,12 @@ def print_files_list(files):
     except Exception as e:
         logging.error(f"Erro ao imprimir a lista de arquivos: {e}")
 
-
 def bar_progress(current, total, width=80):
     messagem = "Executando: %d%% [%d / %d] bytes - " % (
         (current * 100)/total, current, total)
     # Don't use print() as it will print in new line every time.
     sys.stdout.write("\r" + messagem)
     sys.stdout.flush()
-
 
 def download_files(Files, base_url, output_files):
     """Baixa os arquivos de uma lista.
@@ -275,7 +263,6 @@ def download_files(Files, base_url, output_files):
     except Exception as e:
         logging.error(f"Erro ao baixar os arquivos: {e}")
 
-
 def extract_files(Files, output_files, extracted_files):
     """Descompacta os arquivos de uma lista.
 
@@ -297,7 +284,6 @@ def extract_files(Files, output_files, extracted_files):
             logging.error(f"Erro ao descompactar os arquivos: {e}")
 
     logging.info(f"Fim descompactando arquivo")
-
 
 def separar_arquivos(items):
     """Separa os arquivos em listas de acordo com o nome.
@@ -349,7 +335,6 @@ def separar_arquivos(items):
 
         raise
 
-
 def connect_to_database(max_retries=3, delay=5):
     """Conecta ao banco de dados com tentativas de reconexão.
 
@@ -362,21 +347,18 @@ def connect_to_database(max_retries=3, delay=5):
     """
     for attempt in range(max_retries):
         try:
-            logging.info(f"Tentativa de conexão ao banco de dados ({
-                         attempt + 1}/{max_retries})")
+            logging.info(f"Tentativa de conexão ao banco de dados ({attempt + 1}/{max_retries})")
             conexao = mysql.connector.connect(
                 host=os.getenv('db_host'),
                 user=os.getenv('db_user'),
                 password=os.getenv('db_password'),
                 database=os.getenv('db_name'),
+                connection_timeout=600,
                 use_pure=True
             )
-            logging.info(
-                "Conexão com o banco de dados estabelecida com sucesso")
-            logging.info(f"Versão do banco de dados: {
-                         conexao.get_server_info()}")
-            logging.info(f"Conexão ao banco de dados: {
-                         conexao.is_connected()}")
+            logging.info("Conexão com o banco de dados estabelecida com sucesso")
+            logging.info(f"Versão do banco de dados: {conexao.get_server_info()}")
+            logging.info(f"Conexão ao banco de dados: {conexao.is_connected()}")
             logging.info(f"Host: {conexao.server_host}")
             logging.info(f"Database: {conexao.database}")
             logging.info(f"User: {conexao.user}")
@@ -394,12 +376,14 @@ def connect_to_database(max_retries=3, delay=5):
             else:
                 raise
 
-
 def ensure_connection(conexao):
     """Garante que a conexão com o banco de dados esteja ativa."""
-    if not conexao.is_connected():
-        conexao.reconnect(attempts=3, delay=5)
-
+    try:
+        if not conexao.is_connected():
+            conexao.reconnect(attempts=3, delay=5)
+    except mysql.connector.Error as e:
+        logging.error(f"Erro ao garantir a conexão com o banco de dados: {e}")
+        raise
 
 def duracao_processo(start_time, end_time):
     """Calcula a duração do processo.
@@ -418,7 +402,6 @@ def duracao_processo(start_time, end_time):
         logging.error(f"Erro ao calcular a duração do processo: {e}")
 
         raise
-
 
 def process_and_insert_chunk(data, conexao, table_name, table_schema, column_names, batch_size=10000):
     """
@@ -467,16 +450,12 @@ def process_and_insert_chunk(data, conexao, table_name, table_schema, column_nam
             logging.info(
                 f"Processo para inserir os dados no banco {table_name}")
             # Corrigir os valores decimais e inteiros
-            for i, row in enumerate(data):
-                row = list(row)
-                for j, value in enumerate(row):
-                    if column_names[j] == 'capital_social':
-                        row[j] = value.replace(',', '.')
-                    elif column_names[j] in ['porte_empresa']:
-                        row[j] = value.replace('', '05')
-                    elif column_names[j] in ['natureza_juridica', 'qualificacao_responsavel', 'identificador_matriz_filial', 'situacao_cadastral', 'motivo_situacao_cadastral', 'cnae_fiscal_principal', 'municipio', 'ddd_1', 'ddd_2', 'dd_fax', 'qualificacao_socio', 'pais', 'qualificacao_representante_legal', 'faixa_etaria']:
-                        row[j] = int(value) if value.isdigit() else None
-                data[i] = tuple(row)
+            if 'capital_social' in column_names:
+                for i, row in enumerate(data):
+                    row = list(row)
+                    row[column_names.index('capital_social')] = row[column_names.index('capital_social')].replace(',', '.')
+                    row[column_names.index('porte_empresa')] = row[column_names.index('porte_empresa')].replace('', '05')       
+                    data[i] = tuple(row)
 
             # Inserção em massa
             columns = ', '.join(column_names)
@@ -492,17 +471,14 @@ def process_and_insert_chunk(data, conexao, table_name, table_schema, column_nam
                     f'Lote de {len(batch)} registros inserido com sucesso na tabela: {table_name}')
             break
         except OperationalError as e:
-            logging.error(f"Erro operacional ao inserir dados na tabela {
-                          table_name}: {e}")
-
+            logging.error(f"Erro operacional ao inserir dados na tabela {table_name}: {e}")
             if attempt < max_retries - 1:
                 logging.info("Tentando reconectar ao banco de dados...")
                 try:
                     conexao.reconnect(attempts=3, delay=5)
                     logging.info("Reconexão bem-sucedida.")
                 except OperationalError as reconnection_error:
-                    logging.error(f"Erro ao reconectar ao banco de dados: {
-                                  reconnection_error}")
+                    logging.error(f"Erro ao reconectar ao banco de dados: {reconnection_error}")
 
             else:
                 logging.error(f"Falha ao inserir dados na tabela {
@@ -518,7 +494,6 @@ def process_and_insert_chunk(data, conexao, table_name, table_schema, column_nam
             logging.info(
                 f"Finalizando processo de inserção de dados na tabela {table_name}")
 
-
 def processar_arquivos(arquivos, extracted_files, conexao, table_name, table_schema, column_names):
     """Processa os arquivos e insere os dados no banco de dados.
 
@@ -530,6 +505,7 @@ def processar_arquivos(arquivos, extracted_files, conexao, table_name, table_sch
         table_schema (str): Esquema SQL para criar a tabela, se necessário.
         column_names (list): Lista de nomes das colunas.
     """
+    cursor = None
     try:
         start_time = time.time()
         logging.info(f"Processar arquivos de {table_name}")
@@ -558,9 +534,7 @@ def processar_arquivos(arquivos, extracted_files, conexao, table_name, table_sch
     finally:
         if cursor is not None:
             cursor.close()
-        logging.info(
-            f"Finalizando processo de inserção de dados na tabela {table_name}")
-
+        logging.info(f"Finalizando processo de inserção de dados na tabela {table_name}")
 
 def criar_indices(conexao, indices):
     """Cria índices no banco de dados.
@@ -583,7 +557,6 @@ def criar_indices(conexao, indices):
     finally:
         if cursor is not None:
             cursor.close()
-
 
 def listar_arquivos(diretorio):
     """Lista os arquivos de um diretório.
@@ -632,7 +605,7 @@ items = listar_arquivos(extracted_files)
 
 # Iniciar o processo de leitura e inserção dos dados
 insert_start = time.time()
-logging.info(f"LER E INSERIR DADOS")
+logging.info(f"LER E INSERIR DADOS  {insert_start}")
 
 # Separar os arquivos em listas de acordo com o nome
 logging.info(f"Separar arquivos")
