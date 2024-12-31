@@ -436,52 +436,48 @@ def process_and_insert_chunk(data, conexao, table_name, table_schema, column_nam
             current_db = cursor.fetchone()[0]
             logging.info(f"Conectado ao banco de dados: {current_db}")
             cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
-            logging.info(f"Verificar se a tabela {table_name} existe no banco de dados {
-                         current_db} se sim apagamos a tabela")
+            logging.info(f"Verificar se a tabela {table_name} existe no banco de dados {current_db} se sim apagamos a tabela")
             result = cursor.fetchone()
             if result is None:
-                logging.info(f"Tabela {table_name} não existe no banco de dados {
-                             current_db}. Criando tabela.")
+                logging.info(f"Tabela {table_name} não existe no banco de dados {current_db}. Criando tabela.")
                 cursor.execute(table_schema)
                 conexao.commit()
-                logging.info(
-                    f"Tabela {table_name} criada com sucesso no banco de dados {current_db}")
+                logging.info(f"Tabela {table_name} criada com sucesso no banco de dados {current_db}")
                 # Verificar novamente se a tabela foi criada
                 cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
                 result = cursor.fetchone()
                 if result is None:
-                    logging.error(f"Falha ao criar a tabela {
-                                  table_name} no banco de dados {current_db}")
-                    raise Exception(f"Falha ao criar a tabela {
-                                    table_name} no banco de dados {current_db}")
+                    logging.error(f"Falha ao criar a tabela {table_name} no banco de dados {current_db}")
+                    raise Exception(f"Falha ao criar a tabela {table_name} no banco de dados {current_db}")
 
             # Processo para inserir os dados no banco
-            logging.info(
-                f"Processo para inserir os dados no banco {table_name}")
-            # Corrigir os valores decimais
-            if 'capital_social' in column_names:
-                for i, row in enumerate(data):
-                    row = list(row)
-                    row[column_names.index('capital_social')] = row[column_names.index(
-                        'capital_social')].replace(',', '.')
-                    data[i] = tuple(row)
+            logging.info(f"Processo para inserir os dados no banco {table_name}")
+            # Corrigir os valores decimais e inteiros
+            for i, row in enumerate(data):
+                row = list(row)
+                for j, value in enumerate(row):
+                    if column_names[j] == 'capital_social':
+                        row[j] = value.replace(',', '.')
+                    elif column_names[j] in ['porte_empresa']:
+                        row[j] = value.replace('', '05')    
+                    elif column_names[j] in ['natureza_juridica', 'qualificacao_responsavel', 'identificador_matriz_filial', 'situacao_cadastral', 'motivo_situacao_cadastral', 'cnae_fiscal_principal', 'municipio', 'ddd_1', 'ddd_2', 'dd_fax', 'qualificacao_socio', 'pais', 'qualificacao_representante_legal', 'faixa_etaria']:
+                        row[j] = int(value) if value.isdigit() else None
+                data[i] = tuple(row)
 
             # Inserção em massa
             columns = ', '.join(column_names)
             placeholders = ', '.join(['%s'] * len(column_names))
-            insert_query = f"INSERT INTO {
-                table_name} ({columns}) VALUES ({placeholders})"
+            insert_query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
             for i in range(0, len(data), batch_size):
                 batch = data[i:i + batch_size]
                 cursor.executemany(insert_query, batch)
                 conexao.commit()
-                logging.info(
-                    f'Lote de {len(batch)} registros inserido com sucesso na tabela: {table_name}')
+                logging.info(f'Lote de {len(batch)} registros inserido com sucesso na tabela: {table_name}')
             break
         except OperationalError as e:
-            logging.error(f"Erro operacional ao inserir dados na tabela {
-                          table_name}: {e}")
+            logging.error(f"Erro operacional ao inserir dados na tabela {table_name}: {e}")
+
 
             if attempt < max_retries - 1:
                 logging.info("Tentando reconectar ao banco de dados...")
@@ -489,12 +485,10 @@ def process_and_insert_chunk(data, conexao, table_name, table_schema, column_nam
                     conexao.reconnect(attempts=3, delay=5)
                     logging.info("Reconexão bem-sucedida.")
                 except OperationalError as reconnection_error:
-                    logging.error(f"Erro ao reconectar ao banco de dados: {
-                                  reconnection_error}")
+                    logging.error(f"Erro ao reconectar ao banco de dados: {reconnection_error}")
 
             else:
-                logging.error(f"Falha ao inserir dados na tabela {
-                              table_name} após {max_retries} tentativas")
+                logging.error(f"Falha ao inserir dados na tabela {table_name} após {max_retries} tentativas")
                 raise
         except mysql.connector.Error as e:
             logging.error(f"Erro ao inserir dados na tabela {table_name}: {e}")
@@ -503,8 +497,7 @@ def process_and_insert_chunk(data, conexao, table_name, table_schema, column_nam
         finally:
             if cursor is not None:
                 cursor.close()
-            logging.info(
-                f"Finalizando processo de inserção de dados na tabela {table_name}")
+            logging.info(f"Finalizando processo de inserção de dados na tabela {table_name}")
 
 
 def processar_arquivos(arquivos, extracted_files, conexao, table_name, table_schema, column_names):
@@ -633,16 +626,117 @@ conexao = connect_to_database()
 if conexao is None:
     logging.info("Conexão falhou")
 else:
-    tabelas = {'empresa': {'schema': """CREATE TABLE empresa (cnpj_basico object,razao_social object,natureza_juridica int32,qualificacao_responsavel int32,capital_social object,porte_empresa int32,ente_federativo_responsavel object)""", 'columns': ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']},
-               'estabelecimento': {'schema': """CREATE TABLE estabelecimento (cnpj_basico object, cnpj_ordem object, cnpj_dv object, identificador_matriz_filial int32, nome_fantasia object, situacao_cadastral int32, data_situacao_cadastral int32, motivo_situacao_cadastral int32, nome_cidade_exterior object,pais object, data_inicio_atividade int32, cnae_fiscal_principal int32, cnae_fiscal_secundaria object, tipo_logradouro object, logradouro object, numero object, complemento object, bairro object, cep object, uf object, municipio int32, ddd_1 object, telefone_1 object, ddd_2 object, telefone_2 object, dd_fax object, fax object, correio_eletronico object, situacao_especial object, data_situacao_especial object)""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial', 'nome_fantasia', 'situacao_cadastral', 'data_situacao_cadastral', 'motivo_situacao_cadastral', 'nome_cidade_exterior', 'pais', 'data_inicio_atividade', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria', 'tipo_logradouro', 'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'municipio', 'ddd_1', 'telefone_1', 'ddd_2', 'telefone_2', 'dd_fax', 'fax', 'correio_eletronico', 'situacao_especial', 'data_situacao_especial']},
-               'simples': {'schema': """CREATE TABLE simples (cnpj_basico object, opcao_simples object, data_opcao_simples int32, data_exclusao_simples int32, opcao_mei object, data_opcao_mei int32, data_exclusao_mei int32)""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'opcao_pelo_simples', 'data_opcao_simples', 'data_exclusao_simples', 'opcao_mei', 'data_opcao_mei', 'data_exclusao_mei']},    
-               'socios': {'schema': """CREATE TABLE socios (cnpj_basico object, identificador_socio int32, nome_socio_razao_social object, cpf_cnpj_socio object, qualificacao_socio int32, data_entrada_sociedade int32, pais int32, representante_legal object, nome_do_representante object, qualificacao_representante_legal int32, faixa_etaria int32)""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'identificador_socio', 'nome_socio_razao_social', 'cpf_cnpj_socio', 'qualificacao_socio', 'data_entrada_sociedade', 'pais', 'representante_legal', 'nome_representante', 'qualificacao_representante_legal', 'faixa_etaria']},
-               'pais': {'schema': """CREATE TABLE pais (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
-               'munic': {'schema': """CREATE TABLE munic (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
-               'quals': {'schema': """CREATE TABLE quals (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
-               'natju': {'schema': """CREATE TABLE natju (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
-               'cnae': {'schema': """CREATE TABLE cnae (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
-
+    tabelas = {
+        'empresa': {
+            'schema': """CREATE TABLE empresa (
+                cnpj_basico VARCHAR(14),
+                razao_social VARCHAR(255),
+                natureza_juridica INT,
+                qualificacao_responsavel INT,
+                capital_social DECIMAL(15, 2),
+                porte_empresa INT,
+                ente_federativo_responsavel VARCHAR(255)
+            )""",
+            'columns': ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']
+        },
+        'estabelecimento': {
+            'schema': """CREATE TABLE estabelecimento (
+                cnpj_basico VARCHAR(14),
+                cnpj_ordem VARCHAR(3),
+                cnpj_dv VARCHAR(2),
+                identificador_matriz_filial INT,
+                nome_fantasia VARCHAR(255),
+                situacao_cadastral INT,
+                data_situacao_cadastral DATE,
+                motivo_situacao_cadastral INT,
+                nome_cidade_exterior VARCHAR(255),
+                pais VARCHAR(255),
+                data_inicio_atividade DATE,
+                cnae_fiscal_principal INT,
+                cnae_fiscal_secundaria VARCHAR(255),
+                tipo_logradouro VARCHAR(255),
+                logradouro VARCHAR(255),
+                numero VARCHAR(10),
+                complemento VARCHAR(255),
+                bairro VARCHAR(255),
+                cep VARCHAR(8),
+                uf VARCHAR(2),
+                municipio INT,
+                ddd_1 VARCHAR(4),
+                telefone_1 VARCHAR(20),
+                ddd_2 VARCHAR(4),
+                telefone_2 VARCHAR(20),
+                dd_fax VARCHAR(4),
+                fax VARCHAR(20),
+                correio_eletronico VARCHAR(255),
+                situacao_especial VARCHAR(255),
+                data_situacao_especial DATE
+            )""",
+            'columns': ['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial', 'nome_fantasia', 'situacao_cadastral', 'data_situacao_cadastral', 'motivo_situacao_cadastral', 'nome_cidade_exterior', 'pais', 'data_inicio_atividade', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria', 'tipo_logradouro', 'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'municipio', 'ddd_1', 'telefone_1', 'ddd_2', 'telefone_2', 'dd_fax', 'fax', 'correio_eletronico', 'situacao_especial', 'data_situacao_especial']
+        },
+        'simples': {
+            'schema': """CREATE TABLE simples (
+                cnpj_basico VARCHAR(14),
+                opcao_simples VARCHAR(3),
+                data_opcao_simples DATE,
+                data_exclusao_simples DATE,
+                opcao_mei VARCHAR(3),
+                data_opcao_mei DATE,
+                data_exclusao_mei DATE
+            )""",
+            'columns': ['cnpj_basico', 'opcao_simples', 'data_opcao_simples', 'data_exclusao_simples', 'opcao_mei', 'data_opcao_mei', 'data_exclusao_mei']
+        },
+        'socios': {
+            'schema': """CREATE TABLE socios (
+                cnpj_basico VARCHAR(14),
+                identificador_socio INT,
+                nome_socio_razao_social VARCHAR(255),
+                cpf_cnpj_socio VARCHAR(14),
+                qualificacao_socio INT,
+                data_entrada_sociedade DATE,
+                pais INT,
+                representante_legal VARCHAR(255),
+                nome_do_representante VARCHAR(255),
+                qualificacao_representante_legal INT,
+                faixa_etaria INT
+            )""",
+            'columns': ['cnpj_basico', 'identificador_socio', 'nome_socio_razao_social', 'cpf_cnpj_socio', 'qualificacao_socio', 'data_entrada_sociedade', 'pais', 'representante_legal', 'nome_do_representante', 'qualificacao_representante_legal', 'faixa_etaria']
+        },
+        'pais': {
+            'schema': """CREATE TABLE pais (
+                codigo INT,
+                nome VARCHAR(255)
+            )""",
+            'columns': ['codigo', 'nome']
+        },
+        'munic': {
+            'schema': """CREATE TABLE munic (
+                codigo INT,
+                nome VARCHAR(255)
+            )""",
+            'columns': ['codigo', 'nome']
+        },
+        'quals': {
+            'schema': """CREATE TABLE quals (
+                codigo INT,
+                nome VARCHAR(255)
+            )""",
+            'columns': ['codigo', 'nome']
+        },
+        'natju': {
+            'schema': """CREATE TABLE natju (
+                codigo INT,
+                nome VARCHAR(255)
+            )""",
+            'columns': ['codigo', 'nome']
+        },
+        'cnae': {
+            'schema': """CREATE TABLE cnae (
+                codigo INT,
+                nome VARCHAR(255)
+            )""",
+            'columns': ['codigo', 'nome']
+        }
     }
 
 for tabela, info in tabelas.items():
