@@ -24,15 +24,7 @@ import zipfile
 # Configuração do logging
 logging.basicConfig(filename='DADOS_RFB.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
-
-
-def main():
-    cnpj_basico = ''
-    current = 1
-    i = 0
-    # Gerar Log
-    logging.info(f"Iniciando o processo de carga")
-
+logging.info(f"Iniciando o processo de carga")
 
 def check_diff(url, file_name):
     # Verifica se o arquivo local é idêntico ao arquivo remoto.
@@ -77,12 +69,11 @@ def check_diff(url, file_name):
 
     except requests.RequestException as e:
         logging.error(f"Erro ao verificar o arquivo remoto: {e}")
-        print(f"Erro ao verificar o arquivo remoto: {e}")
+
         return True
 
     except OSError as e:
         logging.error(f"Erro ao acessar o arquivo local: {e}")
-        print(f"Erro ao acessar o arquivo local: {e}")
         return True
 
 
@@ -189,7 +180,6 @@ def fetch_data(url):
         return raw_html
     except Exception as e:
         logging.error(f"Erro ao obter dados da URL {url}: {e}")
-        print(f"Erro ao obter dados da URL {url}: {e}")
         raise
 
 
@@ -217,7 +207,6 @@ def extract_files_from_html(html_str, file_extension='.zip'):
 
     except Exception as e:
         logging.error(f"Erro ao extrair arquivos da string HTML: {e}")
-        print(f"Erro ao extrair arquivos da string HTML: {e}")
         raise
 
 
@@ -233,7 +222,6 @@ def delete_files_variable():
         return True
     except Exception as e:
         logging.error(f"Erro ao deletar a variável Files: {e}")
-        print(f"Erro ao deletar a variável Files: {e}")
         return False
 
 
@@ -246,10 +234,10 @@ def print_files_list(files):
     try:
         logging.info(f"Imprimir lista de arquivos")
         for i, f in enumerate(files, start=1):
-            print(f'{i} - {f}')
+            logging.error(f'{i} - {f}')
     except Exception as e:
         logging.error(f"Erro ao imprimir a lista de arquivos: {e}")
-        print(f"Erro ao imprimir a lista de arquivos: {e}")
+
 
 
 def bar_progress(current, total, width=80):
@@ -280,14 +268,14 @@ def download_files(Files, base_url, output_files):
                     wget.download(url, out=output_files, bar=bar_progress)
                 except Exception as e:
                     logging.error(f"Erro ao baixar o arquivo {file}: {e}")
-                    print(f"Erro ao baixar o arquivo {file}: {e}")
+
             else:
                 logging.info(f"O arquivo {file} já existe localmente")
         logging.info(f"Fim do Download doa arquivos")
 
     except Exception as e:
         logging.error(f"Erro ao baixar os arquivos: {e}")
-        print(f"Erro ao baixar os arquivos: {e}")
+
 
 
 def extract_files(Files, output_files, extracted_files):
@@ -360,7 +348,7 @@ def separar_arquivos(items):
         return arquivos
     except Exception as e:
         logging.error(f"Erro ao separar os arquivos: {e}")
-        print(f"Erro ao separar os arquivos: {e}")
+
         raise
 
 
@@ -390,7 +378,7 @@ def connect_to_database(max_retries=3, delay=5):
             return conexao
         except mysql.connector.Error as e:
             logging.error(f"Erro ao conectar ao banco de dados: {e}")
-            print(f"Erro ao conectar ao banco de dados: {e}")
+
             if attempt < max_retries - 1:
                 logging.info(f"Tentando reconectar ao banco de dados em {
                              delay} segundos...")
@@ -420,7 +408,7 @@ def duracao_processo(start_time, end_time):
         return
     except Exception as e:
         logging.error(f"Erro ao calcular a duração do processo: {e}")
-        print(f"Erro ao calcular a duração do processo: {e}")
+
         raise
 
 
@@ -578,7 +566,7 @@ def criar_indices(conexao, indices):
             logging.info(f"Índice criado: {index}")
     except mysql.connector.Error as e:
         logging.error(f"Erro ao criar índice: {e}")
-        print(f"Erro ao criar índice: {e}")
+
         raise
     finally:
         if cursor is not None:
@@ -599,7 +587,7 @@ def listar_arquivos(diretorio):
         return [name for name in os.listdir(diretorio) if os.path.isfile(os.path.join(diretorio, name))]
     except Exception as e:
         logging.error(f"Erro ao listar os arquivos: {e}")
-        print(f"Erro ao listar os arquivos: {e}")
+
         raise
 
 
@@ -645,50 +633,42 @@ conexao = connect_to_database()
 if conexao is None:
     logging.info("Conexão falhou")
 else:
-    tabelas = {'empresa': {'schema': """CREATE TABLE empresa (cnpj_basico VARCHAR(14),razao_social VARCHAR(255),natureza_juridica VARCHAR(255),qualificacao_responsavel VARCHAR(255),capital_social DECIMAL(15, 2),porte_empresa VARCHAR(255),ente_federativo_responsavel VARCHAR(255))""", 'columns': ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']},
-               'estabelecimento': {'schema': """CREATE TABLE estabelecimento (cnpj_basico VARCHAR(8), cnpj_ordem VARCHAR(4), cnpj_dv VARCHAR(2), identificador_matriz_filial VARCHAR(1), situacao_cadastral VARCHAR(2), data_situacao VARCHAR(8), motivo_situacao_cadastral VARCHAR(2), nome_cidade_exterior VARCHAR(55),codigo_pais VARCHAR(5), data_inicio_atividade VARCHAR(8), cnae_fiscal_principal VARCHAR(7), cnae_fiscal_secundaria VARCHAR(7), tipo_logradouro VARCHAR(20), logradouro VARCHAR(60), numero VARCHAR(6), complemento VARCHAR(156), bairro VARCHAR(50), cep VARCHAR(8), uf VARCHAR(2), municipio VARCHAR(50), ddd_1 VARCHAR(4), telefone_1 VARCHAR(12), ddd_2 VARCHAR(4), telefone_2 VARCHAR(12), dd_fax VARCHAR(4), fax VARCHAR(12), correio_eletronico VARCHAR(115), situacao_especial VARCHAR(23), data_situacao_especial VARCHAR(8))""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial', 'situacao_cadastral', 'data_situacao', 'motivo_situacao_cadastral', 'nome_cidade_exterior', 'codigo_pais', 'data_inicio_atividade', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria', 'tipo_logradouro', 'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'municipio', 'ddd_1', 'telefone_1', 'ddd_2', 'telefone_2', 'dd_fax', 'fax', 'correio_eletronico', 'situacao_especial', 'data_situacao_especial']},
-               'socios': {'schema': """CREATE TABLE socios (cnpj_basico VARCHAR(8), cnpj_ordem VARCHAR(4), cnpj_dv VARCHAR(2), identificador_socio VARCHAR(1), nome_socio VARCHAR(60), cpf_cnpj_socio VARCHAR(14), qualificacao_socio VARCHAR(2), data_entrada_sociedade VARCHAR(8), pais VARCHAR(5), nome_pais VARCHAR(50), cpf_representante_legal VARCHAR(11), nome_representante_legal VARCHAR(60), qualificacao_representante_legal VARCHAR(2))""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_socio', 'nome_socio', 'cpf_cnpj_socio', 'qualificacao_socio', 'data_entrada_sociedade', 'pais', 'nome_pais', 'cpf_representante_legal', 'nome_representante_legal', 'qualificacao_representante_legal']},
-               'simples': {'schema': """CREATE TABLE simples (cnpj_basico VARCHAR(8), cnpj_ordem VARCHAR(4), cnpj_dv VARCHAR(2), opcao_simples VARCHAR(1), data_opcao_simples VARCHAR(8), data_exclusao_simples VARCHAR(8), opcao_mei VARCHAR(1), situacao_especial VARCHAR(23), data_situacao_especial VARCHAR(8))""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'opcao_simples', 'data_opcao_simples', 'data_exclusao_simples', 'opcao_mei', 'situacao_especial', 'data_situacao_especial']},
-               'cnae': {'schema': """CREATE TABLE cnae (cnpj_basico VARCHAR(8), cnpj_ordem VARCHAR(4), cnpj_dv VARCHAR(2), cnae_fiscal_principal VARCHAR(7), cnae_fiscal_secundaria VARCHAR(7))""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria']},
-               }
-       elif 'MUNIC' in item:
-            arquivos['munic'].append(item)
-        elif 'NATJU' in item:
-            arquivos['natju'].append(item)
-        elif 'PAIS' in item:
-            arquivos['pais'].append(item)
-        elif 'QUALS' in item:
-            arquivos['quals'].append(item)
-        # ...definir schemas e colunas para as outras tabelas...
+    tabelas = {'empresa': {'schema': """CREATE TABLE empresa (cnpj_basico object,razao_social object,natureza_juridica int32,qualificacao_responsavel int32,capital_social object,porte_empresa int32,ente_federativo_responsavel object)""", 'columns': ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']},
+               'estabelecimento': {'schema': """CREATE TABLE estabelecimento (cnpj_basico object, cnpj_ordem object, cnpj_dv object, identificador_matriz_filial int32, nome_fantasia object, situacao_cadastral int32, data_situacao_cadastral int32, motivo_situacao_cadastral int32, nome_cidade_exterior object,pais object, data_inicio_atividade int32, cnae_fiscal_principal int32, cnae_fiscal_secundaria object, tipo_logradouro object, logradouro object, numero object, complemento object, bairro object, cep object, uf object, municipio int32, ddd_1 object, telefone_1 object, ddd_2 object, telefone_2 object, dd_fax object, fax object, correio_eletronico object, situacao_especial object, data_situacao_especial object)""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial', 'nome_fantasia', 'situacao_cadastral', 'data_situacao_cadastral', 'motivo_situacao_cadastral', 'nome_cidade_exterior', 'pais', 'data_inicio_atividade', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria', 'tipo_logradouro', 'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'municipio', 'ddd_1', 'telefone_1', 'ddd_2', 'telefone_2', 'dd_fax', 'fax', 'correio_eletronico', 'situacao_especial', 'data_situacao_especial']},
+               'simples': {'schema': """CREATE TABLE simples (cnpj_basico object, opcao_simples object, data_opcao_simples int32, data_exclusao_simples int32, opcao_mei object, data_opcao_mei int32, data_exclusao_mei int32)""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'opcao_pelo_simples', 'data_opcao_simples', 'data_exclusao_simples', 'opcao_mei', 'data_opcao_mei', 'data_exclusao_mei']},    
+               'socios': {'schema': """CREATE TABLE socios (cnpj_basico object, identificador_socio int32, nome_socio_razao_social object, cpf_cnpj_socio object, qualificacao_socio int32, data_entrada_sociedade int32, pais int32, representante_legal object, nome_do_representante object, qualificacao_representante_legal int32, faixa_etaria int32)""", 'columns': ['cnpj_basico', 'cnpj_ordem', 'identificador_socio', 'nome_socio_razao_social', 'cpf_cnpj_socio', 'qualificacao_socio', 'data_entrada_sociedade', 'pais', 'representante_legal', 'nome_representante', 'qualificacao_representante_legal', 'faixa_etaria']},
+               'pais': {'schema': """CREATE TABLE pais (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
+               'munic': {'schema': """CREATE TABLE munic (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
+               'quals': {'schema': """CREATE TABLE quals (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
+               'natju': {'schema': """CREATE TABLE natju (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
+               'cnae': {'schema': """CREATE TABLE cnae (codigo int32, nome object)""", 'columns': ['codigo', 'nome']},
+
     }
 
-        for tabela, info in tabelas.items():
-    processar_arquivos(arquivos[tabela], extracted_files,
-                          conexao, tabela, info['schema'], info['columns'])
+for tabela, info in tabelas.items():
+    processar_arquivos(arquivos[tabela], extracted_files,conexao, tabela, info['schema'], info['columns'])
+    logging.info(f"Processo de carga dos arquivos finalizado")
+    insert_end = time.time()
+    Tempo_insert = round(insert_end - insert_start)
+    logging.info(f"Tempo total de execução do processo de carga (em segundos): {Tempo_insert}")
+    index_start = time.time()
 
-                           logging.info(f"Processo de carga dos arquivos finalizado")
-
-                               insert_end = time.time()
-                               Tempo_insert = round(insert_end - insert_start)
-                               print('Tempo total de execução do processo de carga (em segundos): ' + str(Tempo_insert))
-
-                               index_start = time.time()
-
-                               # Criação de índices
-                               indices = [
+ # Criação de índices
+indices = [
         'CREATE INDEX empresa_cnpj ON empresa(cnpj_basico);',
         'CREATE INDEX estabelecimento_cnpj ON estabelecimento(cnpj_basico);',
         'CREATE INDEX socios_cnpj ON socios(cnpj_basico);',
         'CREATE INDEX simples_cnpj ON simples(cnpj_basico);'
     ]
-        criar_indices(conexao, indices)
+criar_indices(conexao, indices)
 
-        index_end = time.time()
-        index_time = round(index_end - index_start)
-        print('Tempo para criar os índices (em segundos): ' + str(index_time))
+index_end = time.time()
+index_time = round(index_end - index_start)
+logging.info(f"Tempo para criar os índices (em segundos): {index_time}")
+logging.info(f"Processo 100% finalizado! Você já pode usar seus dados no BD!")
         # %%
-        print("""Processo 100% finalizado! Você já pode usar seus dados no BD!
+"""Processo 100% finalizado! Você já pode usar seus dados no BD!
      - Desenvolvido por: Aphonso Henrique do Amaral Rafael
      - Adaptado por: Vander Ribeiro Elme
     - Contribua com esse projeto aqui: https://github.com/aphonsoar/Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ
-    """)
+    """
