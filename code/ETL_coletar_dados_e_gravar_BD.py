@@ -1,761 +1,632 @@
-from bs4 import BeautifulSoup
-from mysql.connector.errors import OperationalError
-from dotenv import load_dotenv
-import bs4 as bs
-import csv
-import dask.dataframe as dd
-import getenv
-import hashlib
-import logging
-import lxml
-import mysql.connector
-import numpy as np
+"""
+Script para processamento de dados públicos do CNPJ da Receita Federal do Brasil.
+
+Desenvolvido por: Aphonso Henrique do Amaral Rafael
+Adaptado por: Vander Ribeiro Elme
+
+"""
+
 import os
-import pandas as pd
-import re
-import requests
-import sys
 import time
-import urllib.parse
-import urllib.request
-import wget
+import logging
+import hashlib
 import zipfile
+import csv
+from typing import List, Dict, Tuple, Optional, Any
+from urllib.parse import urljoin
+from pathlib import Path
 
-# Configuração do logging
-logging.basicConfig(filename='DADOS_RFB.log', level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+import requests
+import mysql.connector
+from mysql.connector import errors as mysql_errors
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+import pandas as pd
+import dask.dataframe as dd
+from dask.diagnostics import ProgressBar
+import wget
 
-def check_diff(url, file_name):
-    # Verifica se o arquivo local é idêntico ao arquivo remoto.
-    #
-    # Args:
-    #    url (str): URL do arquivo remoto.
-    #   file_name (str): Nome do arquivo local.
-    #
-    # Returns:
-    #    bool: True se o arquivo precisa ser baixado, False caso contrário.
-    #
-    try:
-        logging.info(
-            f"Verificar diferença entre o arquivo local e o arquivo remoto")
-        response = requests.head(url)
-        response.raise_for_status()
+class Config:
+    """Configurações da aplicação."""
+    
+    # Configuração do logging
+    LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
+    LOG_FILE =  'DADOS_RFB.log'
 
-        remote_size = int(response.headers.get('content-length', 0))
-        if os.path.exists(file_name):
-            with open(file_name, 'rb') as f:
-                local_hash = hashlib.sha256(f.read()).hexdigest()
+    # URLs base
+    DADOS_RF_URL = 'https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/2025-10/'
 
-            # Verificar se o arquivo remoto é diferente do arquivo local
-            if os.path.getsize(file_name) != remote_size:
-                logging.info(f"O arquivo remoto: {
-                             remote_size} é diferente do arquivo local")
-                return True
+    # Tamanhos de lote
+    BATCH_SIZE = 10000
+    MAX_RETRIES = 3
+    RETRY_DELAY = 5
 
-            # Verificar se o hash do arquivo remoto é diferente do arquivo local
-            response = requests.get(url)
+class DatabaseManager:
+    """Gerenciador de conexões com o banco de dados."""
+    
+    def __init__(self):
+        self.connection = None
+
+    def connect(self)-> mysql.connector.MySQLConnection:
+        """Conecta ao banco de dados com tentativas de reconexão."""
+        for attempt in range(Config.MAX_RETRIES):
+            try:
+                self.connection = mysql.connector.connect(
+                    host=os.getenv('DB_HOST'),
+                    user=os.getenv('DB_USER'),
+                    password=os.getenv('DB_PASSWORD'),
+                    database=os.getenv('DB_NAME'),
+                    use_pure=True, auth_plugin='mysql_native_password'
+                )
+
+                logging.info("Conexão com o banco de dados estabelecida com sucesso")
+                logging.info("Versão do banco: %s",self.connection.get_server_info())
+                return self.connection
+        
+            except mysql_errors.Error as e:
+                logging.error("Erro ao conectar ao banco de dados (tentativa %d): %s", attempt + 1, e)
+                if attempt < Config.MAX_RETRIES - 1:
+                    logging.info("Tentando reconectar em %d segundos...", Config.RETRY_DELAY)
+                    time.sleep(Config.RETRY_DELAY)
+                else:
+                    raise
+
+    def ensure_connection(self):
+            """Garante que a conexão com o banco de dados esteja ativa."""
+            if not self.connection or not self.connection.is_connected()    :
+                self.connect()
+
+class FileProcessor:
+    """Processador de arquivos."""
+
+    @staticmethod
+    def create_directories(*paths: str) -> List[Path]:
+        """Cria diretórios recursivamente."""
+        created_paths = []
+        for path in paths:
+            path_obj = Path(path)
+            try:
+                path_obj.mkdir(parents=True, exist_ok=True, mode=0o755)
+                created_paths.append(path_obj)
+                logging.info("Diretório criado: %s", path_obj)
+            except OSError as e:
+                logging.error("Erro ao criar diretório %s: %s", path_obj, e)
+                raise
+        return created_paths
+    
+    @staticmethod
+    def check_remote_file_diff(url:str, local_path:Path) -> bool:
+        """Verifica se o arquivo remoto é diferente do local."""
+        try:
+            response = requests.head(url, timeout=30)
             response.raise_for_status()
-            remote_hash = hashlib.sha256(response.content).hexdigest()
-            if local_hash != remote_hash:
-                logging.info(
-                    f"O hash do arquivo remoto é diferente do arquivo local")
+
+            remote_size = int(response.headers.get('content-length',0))
+            local_path_obj = Path(local_path)
+
+            if not local_path_obj.exists():
+                logging.info("Arquivo local não existe: %s",local_path)
                 return True
-        else:
-            logging.info(f"O arquivo local não existe")
+            
+            if local_path_obj.stat().st_size != remote_size:
+                logging.info("Tamanho diferente: local=%d, remoto=%d", local_path_obj.stat().st_size, remote_size)
+                return True
+            # Verificar hash se os tamanhos forem iguais 
+            local_hash = FileProcessor.calculate_file_hash(local_path_obj)
+            remote_hash = FileProcessor.calculate_remote_file_hash(url)
+
+            if local_hash != remote_hash:
+                logging.info("Hash diferente para arquivo: %s", local_path)
+                return True
+            
+            return False
+        
+        except requests.RequestException as e:
+            logging.error("Erro ao verificar arquivo remoto %s: %s", url, e)
             return True
 
-        return False
+    @staticmethod
+    def calculate_file_hash(file_path:Path) -> str:
+        """Calcula hash SHA256 de um arquivo local."""
+        sha256_hash = hashlib.sha256()
+        with open (file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096),b""):
+                sha256_hash.update(chunk)
+        return sha256_hash.hexdigest()
+    
+    @staticmethod
+    def calculate_remote_file_hash(url:str) -> str:
+        """ Calcula hash SHA256 de um arquivo remoto. """
+        sha256_hash = hashlib.sha256()
+        response = requests.get(url, stream=True, timeout=60)
+        response.raise_for_status()
 
-    except requests.RequestException as e:
-        logging.error(f"Erro ao verificar o arquivo remoto: {e}")
+        for chunk in response.iter_content(chunk_size=4096):
+            sha256_hash.update(chunk)
 
-        return True
+        return sha256_hash.hexdigest()
 
-    except OSError as e:
-        logging.error(f"Erro ao acessar o arquivo local: {e}")
-        return True
+    @staticmethod
+    def download_progress(current: int, total: int, width: int=80):
+        """Barra de progresso para download."""
+        porcentagem = (current * 100) / total
+        mensagem = f"Download: {porcentagem:.1f}% [{current} / {total}] bytes"
+        print(f"\r{mensagem}", end="", flush=True)
 
-def create_dataframe(data, columns):
-    """Cria um DataFrame a partir dos dados e colunas fornecidos.
+    @staticmethod
+    def extract_files(zip_files: List[Path], extract_to: Path):
+        """Descompacta arquivos ZIP."""
+        for zip_file in zip_files:
+            try:
+                logging.info("Descompactando: %s", zip_file)
+                with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                    zip_ref.extractall(extract_to)
+            except (zipfile.BadZipFile, OSError) as e:
+                logging.error ("Erro ao descompactar %s: %s", zip_file, e)
+                raise        
 
-    Args:
-    data: Uma lista de listas ou um dicionário contendo os dados.
-    columns: Uma lista com os nomes das colunas.
+class DataProcessor:
+    """"Processador de dados."""
 
-    Returns:
-    Um DataFrame dask.
-    """
-    logging.info(f"Criar DataFrame")
-    df = dd.DataFrame(data, columns=columns)
-    return df
-
-def makedirs_custom(path, exist_ok=True, mode=0o755):
-    """Cria diretórios recursivamente com controle de existência e permissões.
-
-    Args:
-        path (str): Caminho completo do diretório a ser criado.
-        exist_ok (bool, opcional): Se True, não gera erro se o diretório já existe.
-        mode (int, opcional): Permissões do diretório.
-
-    Returns:
-        bool: True se o diretório foi criado com sucesso, False caso contrário.
-    """
-    logging.info(f"Criar diretórios")
-    try:
-        os.makedirs(path, exist_ok=exist_ok, mode=mode)
-        logging.info(f"Diretório {path} criado com sucesso")
-        return True
-    except OSError as e:
-        logging.error(f"Erro ao criar diretório {path}: {e}")
-        return False
-
-def getEnv(env):
-    """
-    Retorna o valor de uma variável de ambiente.
-
-    Args:
-        env (str): Nome da variável de ambiente.
-
-    Returns:
-        str: Valor da variável de ambiente.
-    """
-    logging.info(f"Retornar valor da variável de ambiente {env}")
-    return os.getenv(env)
-
-def load_enviroment(local_env):
-    """Carrega as variáveis de ambiente de um arquivo .env.
-
-    Args:
-        dotenv_path (str): Caminho completo do arquivo .env.
-
-    Returns:
-        bool: True se o arquivo foi carregado com sucesso, False caso contrário.
-    """
-    logging.info(f"Carregar variáveis de ambiente")
-    dotenv_path = os.path.join(local_env, '.env')
-    load_dotenv(dotenv_path=dotenv_path)
-    logging.info(f"Variáveis de ambiente carregadas {dotenv_path}")
-
-def define_directories():
-    """Define os diretórios de saída e extração dos arquivos.
-
-    Returns:
-        str, str: Caminho dos diretórios de saída e extração dos arquivos.
-    """
-    try:
-        logging.info(f"Definir diretórios")
-        output_files = getEnv('OUTPUT_FILES_PATH')
-        logging.info(f"output_files : {output_files}")
-        makedirs_custom(output_files, True, 0o755)
-        extracted_files = getEnv('EXTRACTED_FILES_PATH')
-        logging.info(f"extracted_files : {extracted_files}")
-        makedirs_custom(extracted_files, True, 0o755)
-
-        return output_files, extracted_files
-    except OSError as e:
-        logging.error(
-            f"Erro na definição dos diretórios, verifique o arquivo '.env' ou o local informado do seu arquivo de configuração: {e}")
-        raise
-
-def fetch_data(url):
-    """Obtém os dados de uma URL.
-
-    Args:
-        url (str): URL dos dados.
-
-    Returns:
-        str: Dados obtidos da URL.
-    """
-    try:
-        logging.info(f"Obter dados da URL")
-        response = urllib.request.urlopen(url)
-        raw_html = response.read()
-        return raw_html
-    except Exception as e:
-        logging.error(f"Erro ao obter dados da URL {url}: {e}")
-        raise
-
-def extract_files_from_html(html_str, file_extension='.zip'):
-    """Extrai os arquivos de uma string HTML.
-
-    Args:
-        html_str (str): String HTML.
-        file_extension (str): Extensão do arquivo a ser procurado.
-    Returns:
-        list: Lista de arquivos extraídos.
-    """
-    try:
-        logging.info(f"Extrair arquivos")
-        page_items = BeautifulSoup(html_str, 'lxml')
-        html_str = str(page_items)
-
-        files = []
-        # type: ignore
-        for m in re.finditer(r'href="([^"]+{}[^"]*)"'.format(file_extension), html_str):
-            file_name = m.group(1)
-            logging.info(f"Arquivo encontrado: {file_name}")
-            files.append(file_name)
-        return files
-
-    except Exception as e:
-        logging.error(f"Erro ao extrair arquivos da string HTML: {e}")
-        raise
-
-def delete_files_variable():
-    """Deleta a variável Files.
-
-    Returns:
-        bool: True se a variável foi deletada com sucesso, False caso contrário.
-    """
-    try:
-        logging.info(f"Deletar variável Files")
-        del files
-        return True
-    except Exception as e:
-        logging.error(f"Erro ao deletar a variável Files: {e}")
-        return False
-
-def print_files_list(files):
-    """Imprime a lista de arquivos.
-
-    Args:
-        Files (list): Lista de arquivos.
-    """
-    try:
-        logging.info(f"Imprimir lista de arquivos")
-        for i, f in enumerate(files, start=1):
-            logging.error(f'{i} - {f}')
-    except Exception as e:
-        logging.error(f"Erro ao imprimir a lista de arquivos: {e}")
-
-def bar_progress(current, total, width=80):
-    messagem = "Executando: %d%% [%d / %d] bytes - " % (
-        (current * 100)/total, current, total)
-    # Don't use print() as it will print in new line every time.
-    sys.stdout.write("\r" + messagem)
-    sys.stdout.flush()
-
-def download_files(Files, base_url, output_files):
-    """Baixa os arquivos de uma lista.
-
-    Args:
-        Files (list): Lista de arquivos.
-        output_files (str): Caminho do diretório de saída dos arquivos.
-    """
-    try:
-        logging.info(f"Baixar arquivos")
-
-        for i, file in enumerate(Files, start=1):
-            url = f'{base_url}/{file}'
-            logging.info(f'{i} - {url}')
-            file_name = os.path.join(output_files, file)
-            if check_diff(url, file_name):
-                try:
-                    logging.info(f"Baixando o arquivo {file}")
-                    wget.download(url, out=output_files, bar=bar_progress)
-                except Exception as e:
-                    logging.error(f"Erro ao baixar o arquivo {file}: {e}")
-
-            else:
-                logging.info(f"O arquivo {file} já existe localmente")
-        logging.info(f"Fim do Download doa arquivos")
-
-    except Exception as e:
-        logging.error(f"Erro ao baixar os arquivos: {e}")
-
-def extract_files(Files, output_files, extracted_files):
-    """Descompacta os arquivos de uma lista.
-
-    Args:
-        Files (list): Lista de arquivos.
-        output_files (str): Caminho do diretório de saída dos arquivos.
-        extracted_files (str): Caminho do diretório de extração dos arquivos.
-    """
-    logging.info(f"Descompactar arquivos")
-
-    for i, file in enumerate(Files, start=1):
-        try:
-
-            full_path = os.path.join(output_files, file)
-            logging.info(f"Descompactando arquivo: {full_path}")
-            with zipfile.ZipFile(full_path, 'r') as zip_ref:
-                zip_ref.extractall(extracted_files)
-        except Exception as e:
-            logging.error(f"Erro ao descompactar os arquivos: {e}")
-
-    logging.info(f"Fim descompactando arquivo")
-
-def separar_arquivos(items):
-    """Separa os arquivos em listas de acordo com o nome.
-
-    Args:
-        items (list): Lista de arquivos.
-
-    Returns:
-        list: Listas de arquivos separados.
-    """
-    try:
-        arquivos = {
-            'empresa': [],
-            'estabelecimento': [],
-            'socios': [],
-            'simples': [],
-            'cnae': [],
-            'moti': [],
-            'munic': [],
-            'natju': [],
-            'pais': [],
-            'quals': []
+    @staticmethod
+    def categorize_files(file_list: List[str]) -> Dict[str, List[str]]:
+        """"Categoriza arquivos por tipo."""
+        categorias = {
+            'empresa': 'EMPRE',
+            'estabelecimento': 'ESTABELE',
+            'socios': 'SOCIO',
+            'simples': 'SIMPLES',
+            'cnae': 'CNAE',
+            'moti': 'MOTI',
+            'munic': 'MUNIC',
+            'natju': 'NATJU',
+            'pais': 'PAIS',
+            'quals': 'QUALS'
         }
-        for item in items:
-            if 'EMPRE' in item:
-                arquivos['empresa'].append(item)
-            elif 'ESTABELE' in item:
-                arquivos['estabelecimento'].append(item)
-            elif 'SOCIO' in item:
-                arquivos['socios'].append(item)
-            elif 'SIMPLES' in item:
-                arquivos['simples'].append(item)
-            elif 'CNAE' in item:
-                arquivos['cnae'].append(item)
-            elif 'MOTI' in item:
-                arquivos['moti'].append(item)
-            elif 'MUNIC' in item:
-                arquivos['munic'].append(item)
-            elif 'NATJU' in item:
-                arquivos['natju'].append(item)
-            elif 'PAIS' in item:
-                arquivos['pais'].append(item)
-            elif 'QUALS' in item:
-                arquivos['quals'].append(item)
 
-        return arquivos
-    except Exception as e:
-        logging.error(f"Erro ao separar os arquivos: {e}")
+        categorizado = {categoria:[] for categoria in categorias}
 
-        raise
-
-def connect_to_database(max_retries=3, delay=5):
-    """Conecta ao banco de dados com tentativas de reconexão.
-
-    Args:
-        max_retries (int): Número máximo de tentativas de reconexão.
-        delay (int): Tempo de espera entre as tentativas de reconexão.
-
-    Returns:
-        mysql.connector.connection.MySQLConnection: Conexão com o banco de dados.
-    """
-    for attempt in range(max_retries):
+        for filename in file_list:
+            for categoria, padrao in categorias.items():
+                if padrao in filename.upper():
+                    categorizado[categoria].append(filename)
+                    break
+        return categorizado
+    
+    @staticmethod
+    def parse_date(date_str:str) -> Optional[pd.Timestamp]:
+        """"Converte string de data para objeto datetime."""
+        if not date_str or not date_str.strip() or not date_str.isdigit():
+            return None
         try:
-            logging.info(f"Tentativa de conexão ao banco de dados ({
-                         attempt + 1}/{max_retries})")
-            conexao = mysql.connector.connect(
-                host=os.getenv('db_host'),
-                user=os.getenv('db_user'),
-                password=os.getenv('db_password'),
-                database=os.getenv('db_name'),
-                use_pure=True
-            )
-            logging.info(
-                "Conexão com o banco de dados estabelecida com sucesso")
-            logging.info(f"Versão do banco de dados: {
-                         conexao.get_server_info()}")
-            logging.info(f"Conexão ao banco de dados: {
-                         conexao.is_connected()}")
-            logging.info(f"Host: {conexao.server_host}")
-            logging.info(f"Database: {conexao.database}")
-            logging.info(f"User: {conexao.user}")
+            return pd.to_datetime(date_str, format='%Y%m%d')
+        except ValueError:
+            return None
+        
+    @staticmethod
+    def clean_numeric_value(value:str, field_name: str) -> Any:
+        """Limpa e converte valores numéricos."""
+        if not value or not value.strip():
+            return None
+        
+        if field_name == 'capital_social':
+            return float(value.replace(',','.')) if value.replace(',','').replace('.','').isdigit() else None
+        elif field_name in ['natureza_juridica', 'qualificacao_responsavel', 'ídentificador_matriz_filial', 'situacao_cadsatral']:
+            return int(value) if value.isdigit() else None
+        
+        return value
+    
+class RFBDataLoader:
+    """Carregador principal de dados da RFB."""
+    def __init__(self, env_path:str):
+        self.env_path = Path(env_path)
+        self.db_manager = DatabaseManager()
+        self.file_processor = FileProcessor()
+        self.data_processor = DataProcessor()
 
-            logging.info(f"Protocol: {conexao.connection_id}")
+        self.setup_logging()
+        self.load_environment()
 
-            return conexao
-        except mysql.connector.Error as e:
-            logging.error(f"Erro ao conectar ao banco de dados: {e}")
+        self.output_dir, self.extract_dir = self.setup_directories()
+        self.files = []
 
-            if attempt < max_retries - 1:
-                logging.info(f"Tentando reconectar ao banco de dados em {
-                             delay} segundos...")
-                time.sleep(delay)
-            else:
+    def setup_logging(self):
+        """Configura o sistema de logging."""
+        logging.basicConfig(
+            filename = Config.LOG_FILE,
+            level = logging.INFO,
+            format = Config.LOG_FORMAT
+        )
+
+    def load_environment(self):
+        """Carrega variáveis de ambiente."""
+        dotenv_path = self.env_path / '.env'
+        if dotenv_path.exists():
+            load_dotenv(dotenv_path = dotenv_path)
+            logging.info("Variáveis de ambiente carregadas de: %s", dotenv_path)
+        else:
+            logging.warning("Ärquivo .env não encontrado em: %s", dotenv_path)
+
+    def setup_directories(self) -> Tuple[Path, Path]:
+        """Configura dirétorios de trabalho."""
+        output_path = Path(os.getenv('OUTPUT_FILES_PATH','output'))
+        extract_path = Path(os.getenv('EXTRACTED_FILES_PATH','estracted'))
+
+        self.file_processor.create_directories(output_path, extract_path)
+        return output_path, extract_path
+
+    def fetch_file_list(self, url:str = Config.DADOS_RF_URL) -> List[str]:
+        """Öntém lista de arquivos do site da RFB."""
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.content, 'lxml')
+            files = []
+
+            for link in soup.find_all('a', href = True):
+                href = link['href']
+                if href.endswith('.zip'):
+                    files.append(href)
+                    logging.info('Arquivo encontrato: %s', href)
+
+            return files
+        except requests.RequestException as e:
+            logging.error("Erro ao obter lista de  arquivos: %s", e)
+            raise      
+        
+    def download_files(self, files:List[str], base_url: str = Config.DADOS_RF_URL):
+        """Faz download dos arquivos."""
+        downloaded_files = []
+
+        for filename in files:
+            file_url = urljoin(base_url, filename)
+            local_path = self.output_dir / filename
+
+            if not self.file_processor.check_remote_file_diff(file_url, local_path):
+                logging.info("Ärquivo já está atualizado: %s", filename)
+                downloaded_files.append(local_path)
+                continue
+
+            try:
+                logging.info("Baixando: %s", filename)
+                wget.download(file_url, out=str(self.output_dir), bar=self.file_processor.download_progress)
+                downloaded_files.append(local_path)
+                print() # Nova linha após a barra de progresso
+
+            except Exception as e:
+                logging.error("Erro ao baixar %s: %s", filename, e)
                 raise
+        return downloaded_files
 
-def ensure_connection(conexao):
-    """Garante que a conexão com o banco de dados esteja ativa."""
-    if not conexao.is_connected():
-        conexao.reconnect(attempts=3, delay=5)
+    def process_data_files(self, categorizado_files: Dict[str, List[str]]):
+        """Pocessa os arquivos de dados e insere no banco de dados."""
+        conexao = self.db_manager.connect()
 
-def duracao_processo(start_time, end_time):
-    """Calcula a duração do processo.
+        table_definitions = self.get_table_definitions()
 
-    Args:
-        start_time (float): Tempo de início do processo.
-        end_time (float): Tempo de fim do processo.
+        for table_name, file_list in categorizado_files.items():
+            if not file_list:
+                logging.warning("Nenhum arquivo encontrado para tabela: %s", table_name)
+                continue
 
-    Returns:
-        int: Duração do processo em segundos.
-    """
-    try:
-        logging.info(f'Duração do processo: {end_time - start_time}')
-        return
-    except Exception as e:
-        logging.error(f"Erro ao calcular a duração do processo: {e}")
+            logging.info("Processando tanela: %s", table_name)
+            self.process_table_data(conexao, table_name, file_list, table_definitions[table_name])
 
-        raise
+    def get_table_definitions(self) -> Dict[str, Dict]:
+        """Retorna definições das tabelas."""
+        return {
+            'empresa': {
+                'schema': """CREATE TABLE empresa (
+                    cnpj_basico VARCHAR(14),
+                    razao_social VARCHAR(255),
+                    natureza_juridica INT,
+                    qualificacao_responsavel INT,
+                    capital_social DECIMAL(15,2),
+                    porte_empresa INT,
+                    ente_federativo_responsavel VARCHAR(255)
+                )""".replace('\n                    ',''),
+                'columns':['cnpj_basico', 'razao_social', 'natureza_juridica',
+                           'qualificacao_responsavel', 'capital_social', 'porte_empresa',
+                           'ente_federativo_responsavel']
+            },
+            'estabelecimento': {
+                'schema': """CREATE TABLE estabelecimento (
+                    cnpj_basico VARCHAR(14),
+                    cnpj_ordem VARCHAR(4),
+                    cnpj_dv VARCHAR(2),
+                    identificador_matriz_filial INT,
+                    nome_fantasia VARCHAR(255),
+                    situacao_cadastral INT,
+                    nome_cidade_exterior VARCHAR(255),
+                    pais VARCHAR(255),
+                    data_inicio_atividade DATE,
+                    cnae_fiscal_principal INT,
+                    cnae_fiscal_secundaria VARCHAR(1000),
+                    tipo_logradouro VARCHAR(255),
+                    logradouro VARCHAR(255),
+                    numero VARCHAR(10),
+                    complemento VARCHAR(255),
+                    bairro VARCHAR(255),
+                    cep VARCHAR(8),
+                    uf VARCHAR(2),
+                    municipio INT,
+                    ddd_1 VARCHAR(4),
+                    telefone_1 VARCHAR(20),
+                    ddd_2 VARCHAR(4),
+                    telefone_2 VARCHAR(20),
+                    dd_fax VARCHAR(4),
+                    fax VARCHAR(20),
+                    correio_eletronico VARCHAR(255),
+                    situacao_especial VARCHAR(255),
+                    data_situacao_especial DATE
+                )""".replace('\n                    ',''),
+                'columns':['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial',
+                           'nome_fantasia','situacao_cadastral', 'data_situacao_cadastral',
+                           'motivo_situacao_cadastral', 'nome_cidade_exterior', 'pais','data_inicio_atividade',
+                           'cnae_fiscal_principal','cnae_fiscal_secundaria','tipo_logradouro','logradouro',
+                           'numero','complemento', 'bairro', 'cep', 'uf', 'municipio', 'ddd_1', 'telefone_1',
+                           'ddd_2', 'telefone_2', 'dd_fax', 'fax','correio_eletronico', 'situacao_especial',
+                           'data_situacao_especial']
 
-def process_and_insert_chunk(data, conexao, table_name, table_schema, column_names, batch_size=10000):
-    """
-    Grava dados no banco de dados em lotes.
+            },
+            'simples': {
+                'schema': """CREATE TABLE simples (
+                    cnpj_basico VARCHAR(14),
+                    opcao_simples VARCHAR(1),
+                    data_opcao_simples DATE,
+                    data_exclusao_simples DATE,
+                    opcao_mei VARCHAR(3),
+                    data_opcao_mei DATE,
+                    data_exclusao_mei DATE
+                )""".replace('\n                ', ' '),
+                'columns': ['cnpj_basico', 'opcao_simples', 'data_opcao_simples', 
+                            'data_exclusao_simples', 'opcao_mei', 'data_opcao_mei', 
+                            'data_exclusao_mei']
+            },
+            'socios': {
+                    'schema': """CREATE TABLE socios (
+                        cnpj_basico VARCHAR(14),
+                        identificador_socio INT,
+                        nome_socio_razao_social VARCHAR(255),
+                        cpf_cnpj_socio VARCHAR(14),
+                        qualificacao_socio INT,
+                        data_entrada_sociedade DATE,
+                        pais INT,
+                        representante_legal VARCHAR(255),
+                        nome_do_representante VARCHAR(255),
+                        qualificacao_representante_legal INT,
+                        faixa_etaria INT
+                    )""".replace('\n                ', ' '),
+                    'columns': ['cnpj_basico', 'identificador_socio', 'nome_socio_razao_social', 
+                                'cpf_cnpj_socio', 'qualificacao_socio', 'data_entrada_sociedade', 
+                                'pais', 'representante_legal', 'nome_do_representante', 
+                                'qualificacao_representante_legal', 'faixa_etaria']
+            },
+            'pais': {
+                'schema': """CREATE TABLE pais (
+                    codigo INT,
+                    nome VARCHAR(255)
+                )""".replace('\n                ', ' '),
+                'columns': ['codigo', 'nome']
+            },
+            'munic': {
+                'schema': """CREATE TABLE munic (
+                    codigo INT,
+                    nome VARCHAR(255)
+                )""".replace('\n                ', ' '),
+                'columns': ['codigo', 'nome']
+            },
+            'quals': {
+                'schema': """CREATE TABLE quals (
+                    codigo INT,
+                    nome VARCHAR(255)
+                )""".replace('\n                ', ' '),
+                'columns': ['codigo', 'nome']
+            },
+            'natju': {
+                'schema': """CREATE TABLE natju (
+                    codigo INT,
+                    nome VARCHAR(255)
+                )""".replace('\n                ', ' '),
+                'columns': ['codigo', 'nome']
+            },
+            'cnae': {
+                'schema': """CREATE TABLE cnae (
+                    codigo INT,
+                    nome VARCHAR(255)
+                )""".replace('\n                ', ' '),
+                'columns': ['codigo', 'nome']
+            }
+        }
 
-    Args:
-        data (list): Lista de tuplas contendo os dados a serem inseridos.
-        conexao (mysql.connector.connection.MySQLConnection): Conexão com o banco de dados.
-        table_name (str): Nome da tabela no banco de dados.
-        table_schema (str): Esquema SQL para criar a tabela, se necessário.
-        column_names (list): Lista com os nomes das colunas.
-        batch_size (int): Tamanho do lote para inserção de dados.
-    """
-    logging.info(f"Gravar dados no banco {table_name}")
-    cursor = None
-    max_retries = 3
-    for attempt in range(max_retries):
+    def process_table_data(self,conexao:mysql.connector.MySQLConnection,
+                           table_name:str, file_list: List[str],
+                           table_definition: Dict):
+        """Processa dados de uma tabela específica."""
+        cursor = None
         try:
-            ensure_connection(conexao)
             cursor = conexao.cursor()
-            # Verificar se a tabela existe
-            cursor.execute(f'Select database()')
-            current_db = cursor.fetchone()[0]
-            logging.info(f"Conectado ao banco de dados: {current_db}")
-            cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
-            logging.info(f"Verificar se a tabela {table_name} existe no banco de dados {current_db} se sim apagamos a tabela")
-            result = cursor.fetchone()
-            if result is None:
-                logging.info(f"Tabela {table_name} não existe no banco de dados {current_db}. Criando tabela.")
-                cursor.execute(table_schema)
-                conexao.commit()
-                logging.info(f"Tabela {table_name} criada com sucesso no banco de dados {current_db}")
-                # Verificar novamente se a tabela foi criada
-                cursor.execute(f"SHOW TABLES LIKE '{table_name}'")
-                result = cursor.fetchone()
-                if result is None:
-                    logging.error(f"Falha ao criar a tabela {table_name} no banco de dados {current_db}")
-                    raise Exception(f"Falha ao criar a tabela {table_name} no banco de dados {current_db}")
 
-            # Processo para inserir os dados no banco
-            logging.info(f"Processo para inserir os dados no banco {table_name}")
-            # Corrigir os valores decimais e inteiros
-            for i, row in enumerate(data):
-                row = list(row)
-                for j, value in enumerate(row):
-                    if column_names[j] == 'capital_social':
-                        row[j] = value.replace(',', '.')
-                    elif column_names[j] in ['porte_empresa']:
-                        row[j] = value.replace('', '05')
-                    elif column_names[j] in ['natureza_juridica', 'qualificacao_responsavel', 'identificador_matriz_filial', 'situacao_cadastral', 'motivo_situacao_cadastral', 'cnae_fiscal_principal', 'municipio', 'ddd_1', 'ddd_2', 'dd_fax', 'qualificacao_socio', 'pais', 'qualificacao_representante_legal', 'faixa_etaria']:
-                        row[j] = int(value) if value.isdigit() else None
-                    elif column_names[j] in ['data_situacao_cadastral', 'data_inicio_atividade', 'data_opcao_simples', 'data_exclusao_simples', 'data_opcao_mei', 'data_exclusao_mei', 'data_entrada_sociedade', 'data_situacao_especial']:
-                        try:
-                            row[j] = pd.to_datetime(value, format='%Y%m%d').date() if value.isdigit() else None
-                        except ValueError:
-                            row[j] = None
-                data[i] = tuple(row)
+            # Drop e criação da tabela
+            cursor.execute(f'DROP TABLE IF EXISTS {table_name}')
+            cursor.execute(table_definition['schema'])
+            conexao.commit()
 
-            # Inserção em massa
+            for filename in file_list:
+                file_path = self.extract_dir / filename
+                logging.info("Processando arquivo: %s", filename)
+
+                self.process_single_file(conexao, table_name, file_path, table_definition['columns'])
+        except mysql_errors.Error as e:
+            logging.error("Erro ao processar tabela %s: %s", table_name, e)
+            raise
+        finally:
+            if cursor:
+                cursor.close()
+
+    def process_single_file(self, conexao:mysql.connector.MySQLConnection,
+                            table_name:str, file_path:Path,
+                            column_names:List[str]):
+        """Processa um único arquivo usando pandas para melhor performance."""
+        try:
+            # Usando pandas com dtype apropriado para melhor performance
+            dtype_dict = self.get_dtype_mapping(column_names)
+
+            # Ler arquivo em chunks para economizar memória
+            chunk_size = 50000
+            total_rows = 0
+
+            for chunk in pd.read_csv(file_path, sep=';', encoding='latin1', dtype=dtype_dict, 
+                                     chunksize=chunk_size, low_memory=False):
+                # Aplicar transformações 
+                chunk = self.apply_data_transformations(chunk, column_names)
+
+                # Converter para lista de tuplas para inserção
+                data = [tuple(row) for row in chunk.itertuples(index=False)]
+
+                # Inserir dados no banco
+                self.batch_insert_data(conexao, table_name, data, column_names)
+                total_rows += len(data)
+
+                logging.info("Insiridas %d linhas da tabela %s", total_rows, table_name)
+            
+        except Exception as e:
+            logging.error("Erro ao processar arquivo %s: %s", file_path, e)
+            raise
+        
+    def get_dtype_mapping(self, column_names:List[str]) -> Dict[str, str]:
+        """Retorna mapeamento de tipos para pandas."""
+        dtype_map = {}
+        for col in column_names:
+            if col in ['capital_social']:
+                dtype_map[col] = 'object'  # Será convertido depois
+            elif any(keyword in col for keyword in ['data', 'date']):
+                dtype_map[col] = 'object'  # Será convertido depois
+            else:
+                dtype_map[col] = 'object'  # Usar object para evitar problemas
+        return dtype_map
+
+    def apply_data_transformations(self, df:pd.DataFrame, column_names:List[str]) -> pd.DataFrame:
+        """Aplica transformações nos Dados.""" 
+        for col in column_names:
+            if col in ['capital_social']:
+                df[col] = pd.to_numeric(df[col].str.replace(',','.'), errors='coerce')
+            elif any(keyword in col for keyword in ['data', 'date']):
+                df[col] = pd.to_datetime(df[col], format='%Y%m%d', errors='coerce')
+            elif col in ['natureza_juridica', 'qualificacao_responsavel',
+                         'qualificacao_responsavel', 
+                         'identificador_matriz_filial',
+                         'situacao_cadastral']:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype('Int64')
+        return df
+    
+    def batch_insert_data(self, conexao:mysql.connector.MySQLConnection,
+                          table_name:str, data:List[Tuple],
+                          column_names:List[str], batch_size:int = Config.BATCH_SIZE):
+
+        """Insere dados em lotes"""
+        if not data:
+            return
+        
+        cursor = None
+        try:
+            self.db_manager.ensure_connection()
+            cursor = conexao.cursor()
+
             columns = ', '.join(column_names)
             placeholders = ', '.join(['%s'] * len(column_names))
             insert_query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
-
+            
             for i in range(0, len(data), batch_size):
                 batch = data[i:i + batch_size]
-                logging.info(f"Inserindo lote de {len(batch)} registros na tabela {table_name}")
                 cursor.executemany(insert_query, batch)
                 conexao.commit()
-                logging.info(f'Lote de {len(batch)} registros inserido com sucesso na tabela: {table_name}')
-            break
-        except OperationalError as e:
-            logging.error(f"Erro operacional ao inserir dados na tabela {table_name}: {e}")
 
-            if attempt < max_retries - 1:
-                logging.info("Tentando reconectar ao banco de dados...")
-                try:
-                    conexao.reconnect(attempts=3, delay=5)
-                    logging.info("Reconexão bem-sucedida.")
-                except OperationalError as reconnection_error:
-                    logging.error(f"Erro ao reconectar ao banco de dados: {reconnection_error}")
-
-            else:
-                logging.error(f"Falha ao inserir dados na tabela {table_name} após {max_retries} tentativas")
+                logging.info("Inserido lote de %d registros em %s", len(batch), table_name)
+        
+        except mysql_errors.Error as e:
+            logging.error("Erro ao inserir dados em %s: %s", table_name, e)
+            if cursor:
+                conexao.rollback()
                 raise
-        except mysql.connector.Error as e:
-            logging.error(f"Erro ao inserir dados na tabela {table_name}: {e}")
+        finally:
+            if cursor:
+                cursor.close()
+
+    def create_indexes(self, conexao:mysql.connector.MySQLConnection):
+        """Cria índices no banco de dados."""
+        indexes = [
+            'CREATE INDEX empresa_cnpj ON empresa(cnpj_basico)',
+            'CREATE INDEX estabelecimento_cnpj ON estabelecimento(cnpj_basico)',
+            'CREATE INDEX socios_cnpj ON socios(cnpj_basico)',
+            'CREATE INDEX simples_cnpj ON simples(cnpj_basico)'
+        ]
+
+        cursor = None
+        try:
+            cursor = conexao.cursor()
+            for index in indexes:
+                logging.info("Criando índice: %s", index)
+                cursor.execute(index)
+            conexao.commit()
+        except mysql_errors.Error as e:
+            logging.error("Erro ao criar índices: %s", e)
+            raise
+        finally:
+            if cursor:
+                cursor.close()
+
+
+    def run(self):
+        """Executa o processo completo de carga""" 
+        total_start = time.time()
+
+        try:
+            logging.info("Iniciando processo de carga de dados da RFB")
+
+            # 1. Obter lista de arquivos
+            logging.info("Obtendo lista de arquivos...")
+            self.files = self.fetch_file_list()
+
+            # 2. Download dos arquivos
+            logging.info("Iniciando download dos arquivos...")
+            downloaded_files = self.download_files(self.files)
+
+            # 3. Extrair arquivos
+            logging.info("Extraindo arquivos...")
+            self.file_processor.extract_files(downloaded_files, self.extract_dir)
+
+            # 4. Listar e categorizar arquivos
+            logging.info("Categorizar arquivos...")
+            all_files = [f.name for f in self.extract_dir.iterdir() if f.is_file()]
+            categorizado_files = self.data_processor.categorize_files(all_files)
+            # 5. Processar dados
+            logging.info("Processando dados...")
+            process_start = time.time()
+            self.process_data_files(categorizado_files)
+            process_time = time.time() - process_start
+            logging.info("Tempo de processamento: %.2f segundos", process_time)
+
+            # 6. Criar índices
+            logging.info("Criando índices...")
+            index_start = time.time()
+            self.create_indexes(self.db_manager.connection)
+            index_time = time.time() - index_start
+            logging.info("Tempo para criar índices: %.2f segundos", index_time)
+
+            total_time = time.time() - total_start
+            logging.info("Processo de carga concluído em %.2f segundos", total_time)
+            logging.info("Processo 100 %% finalizado")
+
+        except Exception as e:
+            logging.error("Erro durante execução: %s", e)
             raise
 
-        finally:
-            if cursor is not None:
-                cursor.close()
-            logging.info(f"Finalizando processo de inserção de dados na tabela {table_name}")
+def main():
+    """Função principal."""
+    loader = RFBDataLoader('F:\\Repositorio\\00_Programacao\\08-DADOS_RFB\\DADOS_RFB\\code')
+    loader.run()
 
-def processar_arquivos(arquivos, extracted_files, conexao, table_name, table_schema, column_names):
-    """Processa os arquivos e insere os dados no banco de dados.
-
-    Args:
-        arquivos (list): Lista de arquivos a serem processados.
-        extracted_files (str): Caminho do diretório onde os arquivos foram extraídos.
-        conexao (mysql.connector.connection.MySQLConnection): Conexão com o banco de dados.
-        table_name (str): Nome da tabela no banco de dados.
-        table_schema (str): Esquema SQL para criar a tabela, se necessário.
-        column_names (list): Lista de nomes das colunas.
-    """
-    try:
-        start_time = time.time()
-        logging.info(f"Processar arquivos de {table_name}")
-        cursor = conexao.cursor()
-        # Drop table antes do insert
-        cursor.execute(f'DROP TABLE IF EXISTS {table_name};')
-        conexao.commit()
-        for e in range(0, len(arquivos)):
-            logging.info(f'Trabalhando no arquivo: {arquivos[e]} [...]')
-            extracted_file_path = os.path.join(extracted_files, arquivos[e])
-            data = []
-            with open(extracted_file_path, 'r', encoding='latin1') as f:
-                reader = csv.reader(f, delimiter=';')
-                for row in reader:
-                    data.append(tuple(row))
-
-                # Insere o DataFrame no banco de dados
-                process_and_insert_chunk(
-                    data, conexao, table_name, table_schema, column_names)
-
-            end_time = time.time()
-            duracao_processo(start_time, end_time)
-    except Exception as e:
-        logging.error(f"Erro ao processar os arquivos de {table_name}: {e}")
-        raise
-    finally:
-        if cursor is not None:
-            cursor.close()
-        logging.info(
-            f"Finalizando processo de inserção de dados na tabela {table_name}")
-def listar_arquivos(diretorio):
-    """Lista os arquivos de um diretório.
-
-    Args:
-        diretorio (str): Caminho do diretório.
-
-    Returns:
-        list: Lista de arquivos.
-    """
-    try:
-        logging.info(f"Listar arquivos")
-        return [name for name in os.listdir(diretorio) if os.path.isfile(os.path.join(diretorio, name))]
-    except Exception as e:
-        logging.error(f"Erro ao listar os arquivos: {e}")
-
-        raise
-
-def criar_indices(conexao, indices):
-    """Cria índices no banco de dados.
-
-    Args:
-        conexao (mysql.connector.connection.MySQLConnection): Conexão com o banco de dados.
-        indices (list): Lista de índices a serem criados.
-    """
-    try:
-        cursor = conexao.cursor()
-        for index in indices:
-            logging.info(f"Criando índice: {index}")
-            cursor.execute(index)
-            conexao.commit()
-            logging.info(f"Índice criado: {index}")
-    except mysql.connector.Error as e:
-        logging.error(f"Erro ao criar índice: {e}")
-
-        raise
-    finally:
-        if cursor is not None:
-            cursor.close()
-
-logging.info(f"Iniciando o processo de carga")
-# Definir diretórios
-local_env = 'D:\\Repositorio\\00-Programacao\\06-DADOS_RFB\\DADOS_RFB\\code'
-load_enviroment(local_env)
-
-# Definir diretórios
-output_files, extracted_files = define_directories()
-
-# Acessar o site e obter o conteúdo HTML
-dados_rf = 'https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/2024-12/'
-#dados_rf = 'http://localhost:8000'
-raw_html = fetch_data(dados_rf)
-logging.info(f"Site RFB: {dados_rf}")
-# Extrair arquivos do HTML
-files = extract_files_from_html(raw_html)
-
-# %%
-# Read details from ".env" file:
-
-# Download dos arquivos
-download_files(files, dados_rf, output_files)
-
-# Descompactação dos arquivos
-extract_files(files, output_files, extracted_files)
-
-# Listar os arquivos no diretório
-items = listar_arquivos(extracted_files)
-
-# Iniciar o processo de leitura e inserção dos dados
-insert_start = time.time()
-logging.info(f"LER E INSERIR DADOS")
-
-# Separar os arquivos em listas de acordo com o nome
-logging.info(f"Separar arquivos")
-arquivos = separar_arquivos(items)
-
-# Acesso ao banco de dados
-logging.info("Acesso ao banco de dados")
-conexao = connect_to_database()
-
-if conexao is None:
-    logging.info("Conexão falhou")
-else:
-    tabelas = {
-        'empresa': {
-            'schema': """CREATE TABLE empresa (
-                cnpj_basico VARCHAR(14),
-                razao_social VARCHAR(255),
-                natureza_juridica INT,
-                qualificacao_responsavel INT,
-                capital_social DECIMAL(15, 2),
-                porte_empresa INT,
-                ente_federativo_responsavel VARCHAR(255)
-            )""".replace('\n                ', ' '),
-            'columns': ['cnpj_basico', 'razao_social', 'natureza_juridica', 'qualificacao_responsavel', 'capital_social', 'porte_empresa', 'ente_federativo_responsavel']
-        },
-        'estabelecimento': {
-            'schema': """CREATE TABLE estabelecimento (
-                cnpj_basico VARCHAR(14),
-                cnpj_ordem VARCHAR(4),
-                cnpj_dv VARCHAR(2),
-                identificador_matriz_filial INT,
-                nome_fantasia VARCHAR(255),
-                situacao_cadastral INT,
-                data_situacao_cadastral DATE,
-                motivo_situacao_cadastral INT,
-                nome_cidade_exterior VARCHAR(255),
-                pais VARCHAR(255),
-                data_inicio_atividade DATE,
-                cnae_fiscal_principal INT,
-                cnae_fiscal_secundaria VARCHAR(1000),
-                tipo_logradouro VARCHAR(255),
-                logradouro VARCHAR(255),
-                numero VARCHAR(10),
-                complemento VARCHAR(255),
-                bairro VARCHAR(255),
-                cep VARCHAR(8),
-                uf VARCHAR(2),
-                municipio INT,
-                ddd_1 VARCHAR(4),
-                telefone_1 VARCHAR(20),
-                ddd_2 VARCHAR(4),
-                telefone_2 VARCHAR(20),
-                dd_fax VARCHAR(4),
-                fax VARCHAR(20),
-                correio_eletronico VARCHAR(255),
-                situacao_especial VARCHAR(255),
-                data_situacao_especial DATE
-            )""".replace('\n                ', ' '),
-            'columns': ['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial', 'nome_fantasia', 'situacao_cadastral', 'data_situacao_cadastral', 'motivo_situacao_cadastral', 'nome_cidade_exterior', 'pais', 'data_inicio_atividade', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria', 'tipo_logradouro', 'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'municipio', 'ddd_1', 'telefone_1', 'ddd_2', 'telefone_2', 'dd_fax', 'fax', 'correio_eletronico', 'situacao_especial', 'data_situacao_especial']
-        },
-        'simples': {
-            'schema': """CREATE TABLE simples (
-                cnpj_basico VARCHAR(14),
-                opcao_simples VARCHAR(1),
-                data_opcao_simples DATE,
-                data_exclusao_simples DATE,
-                opcao_mei VARCHAR(3),
-                data_opcao_mei DATE,
-                data_exclusao_mei DATE
-            )""".replace('\n                ', ' '),
-            'columns': ['cnpj_basico', 'opcao_simples', 'data_opcao_simples', 'data_exclusao_simples', 'opcao_mei', 'data_opcao_mei', 'data_exclusao_mei']
-        },
-        'socios': {
-            'schema': """CREATE TABLE socios (
-                cnpj_basico VARCHAR(14),
-                identificador_socio INT,
-                nome_socio_razao_social VARCHAR(255),
-                cpf_cnpj_socio VARCHAR(14),
-                qualificacao_socio INT,
-                data_entrada_sociedade DATE,
-                pais INT,
-                representante_legal VARCHAR(255),
-                nome_do_representante VARCHAR(255),
-                qualificacao_representante_legal INT,
-                faixa_etaria INT
-            )""".replace('\n                ', ' '),
-            'columns': ['cnpj_basico', 'identificador_socio', 'nome_socio_razao_social', 'cpf_cnpj_socio', 'qualificacao_socio', 'data_entrada_sociedade', 'pais', 'representante_legal', 'nome_do_representante', 'qualificacao_representante_legal', 'faixa_etaria']
-        },
-        'pais': {
-            'schema': """CREATE TABLE pais (
-                codigo INT,
-                nome VARCHAR(255)
-            )""".replace('\n                ', ' '),
-            'columns': ['codigo', 'nome']
-        },
-        'munic': {
-            'schema': """CREATE TABLE munic (
-                codigo INT,
-                nome VARCHAR(255)
-            )""".replace('\n                ', ' '),
-            'columns': ['codigo', 'nome']
-        },
-        'quals': {
-            'schema': """CREATE TABLE quals (
-                codigo INT,
-                nome VARCHAR(255)
-            )""".replace('\n                ', ' '),
-            'columns': ['codigo', 'nome']
-        },
-        'natju': {
-            'schema': """CREATE TABLE natju (
-                codigo INT,
-                nome VARCHAR(255)
-            )""".replace('\n                ', ' '),
-            'columns': ['codigo', 'nome']
-        },
-        'cnae': {
-            'schema': """CREATE TABLE cnae (
-                codigo INT,
-                nome VARCHAR(255)
-            )""".replace('\n                ', ' '),
-            'columns': ['codigo', 'nome']
-        }
-    }
-
-for tabela, info in tabelas.items():
-    processar_arquivos(arquivos[tabela], extracted_files,
-                       conexao, tabela, info['schema'], info['columns'])
-    logging.info(f"Processo de carga dos arquivos finalizado")
-    insert_end = time.time()
-    Tempo_insert = round(insert_end - insert_start)
-    logging.info(f"Tempo total de execução do processo de carga (em segundos): {
-                 Tempo_insert}")
-    index_start = time.time()
-
- # Criação de índices
-indices = [
-    'CREATE INDEX empresa_cnpj ON empresa(cnpj_basico);',
-    'CREATE INDEX estabelecimento_cnpj ON estabelecimento(cnpj_basico);',
-    'CREATE INDEX socios_cnpj ON socios(cnpj_basico);',
-    'CREATE INDEX simples_cnpj ON simples(cnpj_basico);'
-]
-criar_indices(conexao, indices)
-
-index_end = time.time()
-index_time = round(index_end - index_start)
-logging.info(f"Tempo para criar os índices (em segundos): {index_time}")
-logging.info(f"Processo 100% finalizado! Você já pode usar seus dados no BD!")
-# %%
-"""Processo 100% finalizado! Você já pode usar seus dados no BD!
-     - Desenvolvido por: Aphonso Henrique do Amaral Rafael
-     - Adaptado por: Vander Ribeiro Elme
-    - Contribua com esse projeto aqui: https://github.com/aphonsoar/Receita_Federal_do_Brasil_-_Dados_Publicos_CNPJ
-    """
+if __name__ == "__main__":
+    main()

@@ -3,5 +3,6 @@
     "python.analysis.typeCheckingMode": "off",
     "cSpell.words": [
         "dotenv"
-    ]
+    ],
+    "python.REPL.enableREPLSmartSend": false
 }
