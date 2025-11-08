@@ -522,7 +522,7 @@ class RFBDataLoader:
                                  column_names: List[str]):
         try:
             # Configurações otimizadas para leitura CSV
-            dtype_spec = self.get_optimized_dtypes(column_names)
+            dtype_spec = {col: 'string' for col in column_names}  # Ler tudo como string primeiro
         
             # Ler arquivo em chunks para melhor performance
             chunk_size = 50000
@@ -541,9 +541,15 @@ class RFBDataLoader:
                 na_filter=True,
                 keep_default_na=False,
                 na_values=['', 'NULL', 'null'],
-                quoting=csv.QUOTE_NONE
+                
             ):
                 chunk_number += 1
+
+                # Limpar aspas extras e espaços antes das transformações
+                for col in chunk.columns:
+                    if chunk[col].dtype == 'object':
+                        chunk[col] = chunk[col].str.strip().str.strip('"')                
+
                 # Aplicar transformações otimizadas
                 chunk = self.apply_optimized_transformations(chunk, column_names)
 
@@ -565,11 +571,14 @@ class RFBDataLoader:
             raise
 
     def get_optimized_dtypes(self, column_names: List[str]) -> Dict[str, str]:
-        """Retorna mapeamento de tipos otimizados para pandas."""
+        """Retorna mapeamento de tipos otimizados para pandas.
+        Observação: ler inicialmente como 'string' para permitir limpeza antes da conversão.
+        """
         dtype_map = {}
         for col in column_names:
+            # manter campos de identificação como string (CNPJ/CPF)
             if 'cnpj' in col.lower() or col in ['cpf_cnpj_socio', 'cnpj_ordem', 'cnpj_dv']:
-                dtype_map[col] = 'string'
+                dtype_map[col] = 'string'                   
             elif col in ['capital_social']:
                 dtype_map[col] = 'string'  # Converter depois
             elif any(keyword in col for keyword in ['natureza_juridica', 'qualificacao', 'identificador', 'situacao', 'motivo',
@@ -578,6 +587,7 @@ class RFBDataLoader:
             elif any(keyword in col for keyword in ['data', 'date']):
                 dtype_map[col] = 'string'  # Será convertido para datetime
             else:
+                # Ler todo o resto inicialmente como string para permitir limpeza segura
                 dtype_map[col] = 'string'
         return dtype_map
     
@@ -590,6 +600,36 @@ class RFBDataLoader:
         return date_columns
 
     def apply_optimized_transformations(self, df: pd.DataFrame, column_names: List[str]) -> pd.DataFrame:
+        import re
+
+        def clean_string_series(s: pd.Series) -> pd.Series:
+            # Força string, remove aspas, NBSP e espaços
+            s = s.astype(str).str.strip().str.replace('"', '', regex=False).str.replace('\xa0', '', regex=False)
+            s = s.replace({'nan': None, 'None': None, '': None})
+            return s
+
+        def clean_int_series(s: pd.Series) -> pd.Series:
+            s = clean_string_series(s)
+            # Remove tudo que não seja dígito ou sinal negativo
+            s = s.fillna('').astype(str).str.replace(r'[^0-9\-]', '', regex=True)
+            s = s.replace({'': None})
+            return pd.to_numeric(s, errors='coerce').astype('Int32')
+
+        def clean_decimal_series(s: pd.Series) -> pd.Series:
+            s = clean_string_series(s)
+            # Remove pontos de milhares e troca vírgula por ponto
+            # Ex: "1.234,56" -> "1234.56"
+            s = s.fillna('').astype(str).str.replace(r'\.', '', regex=True).str.replace(',', '.', regex=False)
+            s = s.replace({'': None})
+            return pd.to_numeric(s, errors='coerce')
+
+        def clean_date_series(s: pd.Series) -> pd.Series:
+            s = clean_string_series(s).fillna('')
+            # Remove tudo que não seja dígito (ex.: aspas) e tenta parse YYYYMMDD
+            s = s.str.replace(r'[^0-9]', '', regex=True)
+            s = s.replace({'': None})
+            return pd.to_datetime(s, format='%Y%m%d', errors='coerce')
+
         """Aplica transformações otimizadas nos dados."""
         for col in column_names:
             if col not in df.columns:
@@ -597,22 +637,24 @@ class RFBDataLoader:
 
             try:
                 if col == 'capital_social':
-                    # Converter capital social para numérico
-                    df[col] = pd.to_numeric(
-                        df[col].str.replace(',', '.', regex=False), 
-                        errors='coerce'
-                    )
+                    # Limpar e converter capital social
+                    df[col] = clean_decimal_series(df[col])
+                
                 elif col in ['natureza_juridica', 'qualificacao_responsavel', 'identificador_matriz_filial', 'situacao_cadastral', 
                              'motivo_situacao_cadastral', 'porte_empresa', 'municipio', 'pais', 'faixa_etaria', 'codigo']:
                     
-                    # Converter para Int32 (nullable integer)
-                    df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int32')
+                    # Limpar e converter capital social
+                    df[col] = clean_int_series(df[col])
+
                 elif any(keyword in col for keyword in ['data', 'date']):
-                    # Já foi convertido pelo parse_dates
-                    continue
+                    df[col] = clean_date_series(df[col])
+                    
+                else:
+                    # Limpeza bsica para strings
+                    df[col] = clean_string_series(df[col])
                     
             except Exception as e:
-                logging.warning("Erro ao transformar coluna %s: %s", col, e)
+                logging.warning (f"Erro ao transformar coluna {col}: {e}")
                 continue
         
         return df
