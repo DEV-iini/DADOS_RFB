@@ -306,6 +306,16 @@ class RFBDataLoader:
 
         try: 
             conexao = self.db_manager.connect()
+            # Garantir que o banco de dados existe e que estamos usando-o
+            db_name = os.getenv('DB_NAME')
+            if not db_name:
+                raise RuntimeError("DB_NAME não definido nas variáveis de ambiente.")
+            
+            with self.db_manager.get_cursor() as cursor:
+                # Apenas usar o banco, sem tentar criar
+                cursor.execute(f"USE `{db_name}`")
+                conexao.commit()
+
             table_definitions = self.get_table_definitions()
 
             # Ordem de processamento: tabelas de referência primeiro, depois dados principais
@@ -350,6 +360,8 @@ class RFBDataLoader:
                     identificador_matriz_filial INT,
                     nome_fantasia VARCHAR(255),
                     situacao_cadastral INT,
+                    data_situacao_cadastral DATE,
+                    motivo_situacao_cadastral varchar(255),
                     nome_cidade_exterior VARCHAR(255),
                     pais VARCHAR(255),
                     data_inicio_atividade DATE,
@@ -374,10 +386,12 @@ class RFBDataLoader:
                     data_situacao_especial DATE,
                     KEY idx_estabelecimento_cnpj (cnpj_basico)
                 )""",
-                'columns':['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial', 'nome_fantasia', 'situacao_cadastral',  'data_situacao_cadastral',
-                           'motivo_situacao_cadastral', 'nome_cidade_exterior', 'pais', 'data_inicio_atividade', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria',
-                           'tipo_logradouro', 'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'municipio', 'ddd_1', 'telefone_1', 'ddd_2', 
-                           'telefone_2', 'dd_fax', 'fax', 'correio_eletronico', 'situacao_especial', 'data_situacao_especial']
+                'columns':['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial', 'nome_fantasia',
+                           'situacao_cadastral', 'data_situacao_cadastral', 'motivo_situacao_cadastral', 'nome_cidade_exterior',
+                           'pais', 'data_inicio_atividade', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria',
+                           'tipo_logradouro', 'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'municipio',
+                           'ddd_1', 'telefone_1', 'ddd_2', 'telefone_2', 'dd_fax', 'fax', 'correio_eletronico',
+                           'situacao_especial', 'data_situacao_especial']
             },
             'simples': {
                 'schema': """CREATE TABLE simples (
@@ -458,25 +472,32 @@ class RFBDataLoader:
             # Verificar se a tabela existe antes (apenas para logging)
             tabela_existia = self.verificar_tabela_existe(conexao, table_name)
             if tabela_existia:
-                logging.info(f"Tabela {table_name} já existia e será recriada.")
-                # Drop e criação da tabela, conforme configuração
-                logging.warning(f"ATENÇÃO: A tabela {table_name} será removida e recriada. Todos os dados existentes serão perdidos.")
-                logging.info(f"Recriando tabela: {table_name}...")
-                cursor.execute(f"DROP TABLE IF EXISTS {table_name}")    # ← DROP se existir
-                logging.info(f"Tabela {table_name} não existia e será criada.")
+                if Config.DROP_AND_RECREATE_TABLES:
+                    logging.info(f"Tabela {table_name} existe e será recriada (drop + create).")
+                    try:
+                        cursor.execute(f"DROP TABLE IF EXISTS {table_name}")    # ← DROP se existir
+                        cursor.execute(table_definition['schema'])              # ← CREATE TABLE
+                        conexao.commit()
+                        logging.info(f"Tabela {table_name} recriada com sucesso.")
+                    except mysql_errors.Error as e:
+                        conexao.rollback()
+                        logging.error(f"Erro ao recriar tabela {table_name}: {e}")
+                        logging.error(f"SQL executado: {table_definition['schema']}")  
+                        raise
+                else:
+                    logging.info(f"Tabela {table_name} existe e será mantida (DROP desativado).")  
             
             else:
-                logging.info(f"Configuração ativa: NÃO remover a tabela {table_name}. Dados existentes serão mantidos.")
-                # Executar CREATE TABLE com tratamento de erro
+                # tabela não existia -> criar
+                logging.info(f"Tabela {table_name} não existe. Criando tabela...")
                 try:
                     cursor.execute(table_definition['schema'])              # ← CREATE TABLE
                     conexao.commit()
                     logging.info(f"Tabela {table_name} criada com sucesso.")
                 except mysql_errors.Error as e:
-                    logging.error(f"Erro ao criar tabela {table_name}: {e}")
-                    # Mostrar o SQL que está causando erro para debugging
-                    logging.error(f"SQL executado: {table_definition['schema']}")
                     conexao.rollback()
+                    logging.error(f"Erro ao criar tabela {table_name}: {e}")
+                    logging.error(f"SQL executado: {table_definition['schema']}")
                     raise
 
             # Processar cada arquivo
@@ -501,15 +522,23 @@ class RFBDataLoader:
         """Verifica se uma tabela existe no banco de dados."""
         cursor = None
         try:
+            db_name = os.getenv('DB_NAME')
+            if not db_name:
+                logging.warning("DB_NAME nào definido ao verificar existência de tabela")
+                db_cond = "DATABASE()"
+            else:
+                db_cond = f"'{db_name}'"
+
             cursor = conexao.cursor()
             cursor.execute(f"""
                 SELECT COUNT(*) 
                 FROM information_schema.tables 
-                WHERE table_schema = DATABASE() 
-                AND table_name = '{table_name}'
-            """)
+                WHERE table_schema = {db_cond} 
+                AND table_name = %s
+            """, (table_name,))
             resultado = cursor.fetchone()
-            return resultado[0] > 0
+            return bool(resultado and resultado[0] > 0)
+        
         except mysql_errors.Error as e:
             logging.error(f"Erro ao verificar existência da tabela {table_name}: {e}")
             return False
@@ -558,7 +587,7 @@ class RFBDataLoader:
 
                 # Inserir dados no banco
                 if data:
-                    self.batch_insert_data_optimized(conexao, table_name, data, column_names, chunk_number)
+                    self.batch_insert_data_optimized(conexao, table_name, data, column_names)
                     total_rows += len(data)
 
                 logging.info("Processadas %d linhas da tabela %s (chunk %d)", 
@@ -669,44 +698,60 @@ class RFBDataLoader:
 
     def batch_insert_data_optimized(self, conexao: mysql.connector.MySQLConnection,
                                    table_name: str, data: List[Tuple],
-                                   column_names: List[str]):
+                                   column_names: List[str], attempt: int =1):
         """Insere dados em lotes com otimizações."""
         if not data:
             return
         
         cursor = None
-
+        max_attempts = 3 # Número máximo de tentativas
         try:
-            cursor = conexao.cursor()
-            columns = ', '.join(column_names)
-            placeholders = ', '.join(['%s'] * len(column_names))
-            insert_query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+            # Tentativas iterativas, reduzindo o tamanho do lote a cada tentativa
+            for current_attempt in range(1, max_attempts + 1):
+                try:
+                    cursor = conexao.cursor()
+                    columns = ', '.join(column_names)
+                    placeholders = ', '.join(['%s'] * len(column_names))
+                    insert_query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
             
-            try:
-                # Inserir em lotes menores para evitar timeouts
-                batch_size = min(Config.BATCH_SIZE, 10000)
-                total_inserted = 0
-                
-                for i in range(0, len(data), batch_size):
-                    batch = data[i:i + batch_size]
-                    cursor.executemany(insert_query, batch)
-                    conexao.commit()
-                    total_inserted += len(batch)
-                    
-                    logging.info("Inserido lote de %d registros em %s (total: %d)", 
-                               len(batch), table_name, total_inserted)
-                
-            except mysql_errors.Error as e:
-                logging.error("Erro ao inserir dados em %s: %s", table_name, e)
-                if cursor:
-                    conexao.rollback()
-                raise
-            finally:
-                if cursor:
-                    cursor.close()
-        except mysql_errors.Error as e:
-                # Tentar inserir em lotes menores em caso de erro
-                self.batch_insert_data_optimized(conexao, table_name, data, column_names)
+                    # calcula tamanho do lote para esta tentativa (mínimo 1)
+                    current_batch_size = max(1, Config.BATCH_SIZE // (2 ** (current_attempt - 1)))
+
+                    total_inserted = 0
+                    # tenta inserir todo o conjunto em batches de current_batch_size
+                    for i in range(0, len(data), current_batch_size):
+                        batch = data[i:i + current_batch_size]
+                        cursor.executemany(insert_query, batch)
+                        conexao.commit()
+                        total_inserted += len(batch)
+                        logging.info(f"Inserido lote de {len(batch)} registros em {table_name} (total: {total_inserted})")
+
+                    # se chegou até aqui sem exceção, sucesso -> sair do loop de tentativa
+                    return
+
+                except mysql_errors.Error as e:
+                    # rollback da tentativa atual
+                    if conexao:
+                        conexao.rollback()
+                    logging.warning(f"Erro na tentativa {current_attempt} ao inserir dados em {table_name}: {e}")
+
+                    # fechar cursor da tentativa antes de nova tentativa
+                    if cursor:
+                        cursor.close()
+                        cursor = None
+
+                    # se atingiu o máximo de tentativas, re-levanta
+                    if current_attempt >= max_attempts:
+                        logging.error(f"Falha ao inserir dados em {table_name} após {max_attempts} tentativas: {e}")
+                        raise
+
+                    # caso contrario, aguarda e tenta novamente com lote menor
+                    logging.info("Tentando novamente com lote menor (tentativa %d)...", current_attempt + 1)
+                    time.sleep(Config.RETRY_DELAY)
+                   
+        finally:
+            if cursor:
+                cursor.close()
 
     def insert_in_smaller_batches(self, conexao: mysql.connector.MySQLConnection,
                                  table_name: str, data: List[Tuple],
