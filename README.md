@@ -12,14 +12,18 @@ Nesse repositório consta um processo de ETL para:
 
 >**ii)** descompactar; 
 
->**iii)** ler, tratar e 
+>**iii)** ler;
 
->**iv)** inserir num banco de dados relacional PostgreSQL.
+>**iv)** tratar; 
+
+>**v)** inserir
+
+Em um banco de dados relacional MariaDB.
 
 ---------------------
 
 ### Infraestrutura necessária:
-- [Python 3.8](https://www.python.org/downloads/release/python-3810/)
+- [Python 3.13](https://www.python.org/downloads/release/python-3810/)
 - [PostgreSQL 14.2](https://www.postgresql.org/download/)
   
 ---------------------
