@@ -28,6 +28,15 @@ import dask.dataframe as dd
 from dask.diagnostics import ProgressBar
 import wget
 import numpy as np
+import sys
+
+try:
+    # Aumentar para 100MB
+    csv_limit_bytes = 104857600
+    csv.field_size_limit(csv_limit_bytes)
+    logging.info(f"Limite de campo CSV definido para {csv_limit_bytes / 1048576:.0f} MB")
+except Exception as e:
+    logging.warning(f"Não foi possível definir o limite de campo CSV: {e}")
 
 class Config:
     """Configurações da aplicação."""
@@ -47,6 +56,15 @@ class Config:
     # Controla se as tabelas devem ser sempre recriadas (drop/create)
     DROP_AND_RECREATE_TABLES = True  # Altere para False para manter dados existentes
 
+logging.basicConfig(
+    level=logging.INFO,
+    format=Config.LOG_FORMAT,
+    handlers=[
+        logging.FileHandler(Config.LOG_FILE, mode='w'), # 'w' para sobrescrever o arquivo a cada execução
+        logging.StreamHandler()
+    ]
+)
+
 class DatabaseManager:
     """Gerenciador de conexões com o banco de dados."""
     
@@ -57,21 +75,27 @@ class DatabaseManager:
         """Conecta ao banco de dados com tentativas de reconexão."""
         for attempt in range(Config.MAX_RETRIES):
             try:
+                # Obtém a porta e converte para int, se não encontrar usa 3306 como padrão
+                db_port_str = os.getenv('DB_PORT', '3306')
+                db_port = int(db_port_str)
+
                 self.connection = mysql.connector.connect(
                     host=os.getenv('DB_HOST'),
                     user=os.getenv('DB_USER'),
                     password=os.getenv('DB_PASSWORD'),
                     database=os.getenv('DB_NAME'),
+                    port=db_port,
                     use_pure=True, 
-                    auth_plugin='mysql_native_password',
                     charset='utf8mb4',
                     collation='utf8mb4_unicode_ci',
-                    raise_on_warnings=True,
+                    raise_on_warnings=False,
                     connection_timeout=30
                 )
 
                 logging.info("Conexão com o banco de dados estabelecida com sucesso")
-                logging.info("Versão do banco: %s",self.connection.server_info)
+                # Ação recomendável:
+                logging.info("Versão do banco: %s", self.connection.server_info)
+
                 return self.connection
         
             except mysql_errors.Error as e:
@@ -130,14 +154,13 @@ class FileProcessor:
             response.raise_for_status()
 
             remote_size = int(response.headers.get('content-length',0))
-            local_path_obj = Path(local_path)
 
-            if not local_path_obj.exists():
+            if not local_path.exists():
                 logging.info("Arquivo local não existe: %s",local_path)
                 return True
             
-            if local_path_obj.stat().st_size != remote_size:
-                logging.info("Tamanho diferente: local=%d, remoto=%d", local_path_obj.stat().st_size, remote_size)
+            if local_path.stat().st_size != remote_size:
+                logging.info("Tamanho diferente: local=%d, remoto=%d", local_path.stat().st_size, remote_size)
                 return True
             
             return False # Para performance, vamos pular a verificação de hash por enquanto
@@ -161,16 +184,18 @@ class FileProcessor:
                 logging.info("Descompactando: %s", zip_file)
                 with zipfile.ZipFile(zip_file, 'r') as zip_ref:
                     zip_ref.extractall(extract_to)
+                    if zip_ref.testzip() is not None:
+                        raise zipfile.BadZipFile(f"Falha na verificação de integridade do arquivo ZIP: {zip_file}")
             except (zipfile.BadZipFile, OSError) as e:
                 logging.error ("Erro ao descompactar %s: %s", zip_file, e)
                 raise        
 
 class DataProcessor:
-    """"Processador de dados."""
+    """Processador de dados."""
 
     @staticmethod
     def categorize_files(file_list: List[str]) -> Dict[str, List[str]]:
-        """"Categoriza arquivos por tipo."""
+        """Categoriza arquivos por tipo."""
         categorias = {
             'empresa': 'EMPRE',
             'estabelecimento': 'ESTABELE',
@@ -245,18 +270,18 @@ class RFBDataLoader:
             load_dotenv(dotenv_path = dotenv_path)
             logging.info("Variáveis de ambiente carregadas de: %s", dotenv_path)
         else:
-            logging.warning("Ärquivo .env não encontrado em: %s", dotenv_path)
+            logging.warning("Arquivo .env não encontrado em: %s", dotenv_path)
 
     def setup_directories(self) -> Tuple[Path, Path]:
-        """Configura dirétorios de trabalho."""
+        """Configura diretórios de trabalho."""
         output_path = Path(os.getenv('OUTPUT_FILES_PATH','output'))
-        extract_path = Path(os.getenv('EXTRACTED_FILES_PATH','estracted'))
+        extract_path = Path(os.getenv('EXTRACTED_FILES_PATH','extracted'))
 
         self.file_processor.create_directories(output_path, extract_path)
         return output_path, extract_path
 
     def fetch_file_list(self, url:str = Config.DADOS_RF_URL) -> List[str]:
-        """Öntém lista de arquivos do site da RFB."""
+        """Obtém lista de arquivos do site da RFB."""
         try:
             response = requests.get(url, timeout=30)
             response.raise_for_status()
@@ -268,7 +293,7 @@ class RFBDataLoader:
                 href = link['href']
                 if href.endswith('.zip'):
                     files.append(href)
-                    logging.info('Arquivo encontrato: %s', href)
+                    logging.info('Arquivo encontrado: %s', href)
 
             return files
         except requests.RequestException as e:
@@ -284,7 +309,7 @@ class RFBDataLoader:
             local_path = self.output_dir / filename
 
             if not self.file_processor.check_remote_file_diff(file_url, local_path):
-                logging.info("Ärquivo já está atualizado: %s", filename)
+                logging.info("Arquivo já está atualizado: %s", filename)
                 downloaded_files.append(local_path)
                 continue
 
@@ -300,28 +325,28 @@ class RFBDataLoader:
         return downloaded_files
 
     def process_data_files(self, categorizado_files: Dict[str, List[str]]):
-        """Pocessa os arquivos de dados e insere no banco de dados."""
-        # Usar uma única conexào para todo processo
+        """Processa os arquivos de dados e insere no banco de dados."""
+        # Usar uma única conexão para todo processo
         conexao = None
 
         try: 
             conexao = self.db_manager.connect()
-            # Garantir que o banco de dados existe e que estamos usando-o
-            db_name = os.getenv('DB_NAME')
-            if not db_name:
-                raise RuntimeError("DB_NAME não definido nas variáveis de ambiente.")
-            
-            with self.db_manager.get_cursor() as cursor:
-                # Apenas usar o banco, sem tentar criar
-                cursor.execute(f"USE `{db_name}`")
-                conexao.commit()
+
+            self.create_all_tables_if_not_exists(conexao)
 
             table_definitions = self.get_table_definitions()
 
+            tables_to_skip_after_first_run = ['simples', 'socios', 'empresa', 'pais', 'munic', 'quals', 'natju', 'cnae']
+
             # Ordem de processamento: tabelas de referência primeiro, depois dados principais
-            processing_order = ['pais', 'munic', 'quals', 'natju', 'cnae', 'empresa', 'estabelecimento', 'socios', 'simples']
+            processing_order = ['estabelecimento']
 
             for table_name in processing_order:
+
+                if table_name in tables_to_skip_after_first_run:
+                    logging.info(f"Tabela '{table_name}' na lista de exclusão. Pulando processamento.")
+                    continue
+
                 if table_name in categorizado_files and categorizado_files[table_name]:
                     self.process_table_data(conexao, table_name, categorizado_files[table_name], table_definitions[table_name])
             
@@ -333,12 +358,45 @@ class RFBDataLoader:
             if conexao and conexao.is_connected():
                 conexao.close()
                 logging.info("Conexão com o banco fechada")
+    
+    def create_all_tables_if_not_exists(self, conexao):
+        """Cria todas as tabelas definidas no banco de dados, se não existirem."""
+        logging.info("Verificando e criando tabelas no banco de dados...")
+        cursor = conexao.cursor()
+        table_definitions = self.get_table_definitions()
+
+        for table_name, definition in table_definitions.items():
+            try:
+                # 1. DROP TABLE IF EXISTS para garantir que esteja limpa
+                #logging.warning(f"Removendo tabela existente (se houver): '{table_name}'")
+                #cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+                
+                # 2. CREATE TABLE (seu esquema já usa IF NOT EXISTS, o que é seguro)
+                create_query = definition['schema'] 
+                logging.info(f"Criando tabela '{table_name}'...")
+                cursor.execute(create_query)
+                logging.info(f"Tabela '{table_name}' criada/verificada com sucesso.")
+                
+            except mysql.connector.Error as err:
+                # Verifique se o erro é especificamente "Tabela já existe" (Error code 1050)
+                if err.errno == 1050:
+                    logging.info(f"Aviso: A tabela '{table_name}' já existe. Prosseguindo.")
+                    continue # Continue para a próxima tabela no loop
+                else:
+                    # Se for qualquer outro erro, registre e pare o processo
+                    logging.error(f"Falha fatal ao criar a tabela '{table_name}': {err.msg}")
+                    conexao.rollback()
+                    raise # Propague o erro fatal
+
+        cursor.close()
+        conexao.commit() # Confirma todas as criações de tabelas
+        logging.info("Todas as tabelas foram verificadas/criadas com sucesso.")
 
     def get_table_definitions(self) -> Dict[str, Dict]:
         """Retorna definições das tabelas."""
         return {
             'empresa': {
-                'schema': """CREATE TABLE empresa (
+                'schema': """CREATE TABLE IF NOT EXISTS empresa (
                     cnpj_basico VARCHAR(14),
                     razao_social VARCHAR(255),
                     natureza_juridica INT,
@@ -353,7 +411,7 @@ class RFBDataLoader:
                            'ente_federativo_responsavel']
             },
             'estabelecimento': {
-                'schema': """CREATE TABLE estabelecimento (
+                'schema': """CREATE TABLE IF NOT EXISTS estabelecimento (
                     cnpj_basico VARCHAR(14),
                     cnpj_ordem VARCHAR(4),
                     cnpj_dv VARCHAR(2),
@@ -361,7 +419,7 @@ class RFBDataLoader:
                     nome_fantasia VARCHAR(255),
                     situacao_cadastral INT,
                     data_situacao_cadastral DATE,
-                    motivo_situacao_cadastral varchar(255),
+                    motivo_situacao_cadastral INT,
                     nome_cidade_exterior VARCHAR(255),
                     pais VARCHAR(255),
                     data_inicio_atividade DATE,
@@ -386,15 +444,16 @@ class RFBDataLoader:
                     data_situacao_especial DATE,
                     KEY idx_estabelecimento_cnpj (cnpj_basico)
                 )""",
-                'columns':['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial', 'nome_fantasia',
-                           'situacao_cadastral', 'data_situacao_cadastral', 'motivo_situacao_cadastral', 'nome_cidade_exterior',
-                           'pais', 'data_inicio_atividade', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria',
-                           'tipo_logradouro', 'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'municipio',
-                           'ddd_1', 'telefone_1', 'ddd_2', 'telefone_2', 'dd_fax', 'fax', 'correio_eletronico',
-                           'situacao_especial', 'data_situacao_especial']
+                'dtypes': {
+                    'situacao_especial': str # Apenas esta como string, o resto Pandas infere
+                },
+                'columns':['cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'identificador_matriz_filial', 'nome_fantasia', 'situacao_cadastral',  'data_situacao_cadastral',
+                           'motivo_situacao_cadastral', 'nome_cidade_exterior', 'pais', 'data_inicio_atividade', 'cnae_fiscal_principal', 'cnae_fiscal_secundaria',
+                           'tipo_logradouro', 'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'municipio', 'ddd_1', 'telefone_1', 'ddd_2', 
+                           'telefone_2', 'dd_fax', 'fax', 'correio_eletronico', 'situacao_especial', 'data_situacao_especial']
             },
             'simples': {
-                'schema': """CREATE TABLE simples (
+                'schema': """CREATE TABLE IF NOT EXISTS simples (
                     cnpj_basico VARCHAR(14),
                     opcao_simples VARCHAR(1),
                     data_opcao_simples DATE,
@@ -407,7 +466,7 @@ class RFBDataLoader:
                 'columns': ['cnpj_basico', 'opcao_simples', 'data_opcao_simples', 'data_exclusao_simples', 'opcao_mei', 'data_opcao_mei', 'data_exclusao_mei']
             },
             'socios': {
-                    'schema': """CREATE TABLE socios (
+                    'schema': """CREATE TABLE IF NOT EXISTS socios (
                         cnpj_basico VARCHAR(14),
                         identificador_socio INT,
                         nome_socio_razao_social VARCHAR(255),
@@ -425,35 +484,35 @@ class RFBDataLoader:
                                 'pais', 'representante_legal', 'nome_do_representante', 'qualificacao_representante_legal', 'faixa_etaria']
             },
             'pais': {
-                'schema': """CREATE TABLE pais (
+                'schema': """CREATE TABLE IF NOT EXISTS pais (
                     codigo INT PRIMARY KEY,
                     nome VARCHAR(255)
                 )""",
                 'columns': ['codigo', 'nome']
             },
             'munic': {
-                'schema': """CREATE TABLE munic (
+                'schema': """CREATE TABLE IF NOT EXISTS munic (
                     codigo INT PRIMARY KEY,
                     nome VARCHAR(255)
                 )""",
                 'columns': ['codigo', 'nome']
             },
             'quals': {
-                'schema': """CREATE TABLE quals (
+                'schema': """CREATE TABLE IF NOT EXISTS quals (
                     codigo INT PRIMARY KEY,
                     nome VARCHAR(255)
                 )""",
                 'columns': ['codigo', 'nome']
             },
             'natju': {
-                'schema': """CREATE TABLE natju (
+                'schema': """CREATE TABLE IF NOT EXISTS natju (
                     codigo INT PRIMARY KEY,
                     nome VARCHAR(255)
                 )""",
                 'columns': ['codigo', 'nome']
             },
             'cnae': {
-                'schema': """CREATE TABLE cnae (
+                'schema': """CREATE TABLE IF NOT EXISTS cnae (
                     codigo INT PRIMARY KEY,
                     nome VARCHAR(255)
                 )""",
@@ -465,41 +524,9 @@ class RFBDataLoader:
                            table_name:str, file_list: List[str],
                            table_definition: Dict):
         """Processa dados de uma tabela específica."""
-        cursor = None
 
         try:
-            cursor = conexao.cursor()
-            # Verificar se a tabela existe antes (apenas para logging)
-            tabela_existia = self.verificar_tabela_existe(conexao, table_name)
-            if tabela_existia:
-                if Config.DROP_AND_RECREATE_TABLES:
-                    logging.info(f"Tabela {table_name} existe e será recriada (drop + create).")
-                    try:
-                        cursor.execute(f"DROP TABLE IF EXISTS {table_name}")    # ← DROP se existir
-                        cursor.execute(table_definition['schema'])              # ← CREATE TABLE
-                        conexao.commit()
-                        logging.info(f"Tabela {table_name} recriada com sucesso.")
-                    except mysql_errors.Error as e:
-                        conexao.rollback()
-                        logging.error(f"Erro ao recriar tabela {table_name}: {e}")
-                        logging.error(f"SQL executado: {table_definition['schema']}")  
-                        raise
-                else:
-                    logging.info(f"Tabela {table_name} existe e será mantida (DROP desativado).")  
-            
-            else:
-                # tabela não existia -> criar
-                logging.info(f"Tabela {table_name} não existe. Criando tabela...")
-                try:
-                    cursor.execute(table_definition['schema'])              # ← CREATE TABLE
-                    conexao.commit()
-                    logging.info(f"Tabela {table_name} criada com sucesso.")
-                except mysql_errors.Error as e:
-                    conexao.rollback()
-                    logging.error(f"Erro ao criar tabela {table_name}: {e}")
-                    logging.error(f"SQL executado: {table_definition['schema']}")
-                    raise
-
+            logging.info(f"Iniciando carga de dados para a tabela: {table_name}...")
             # Processar cada arquivo
             for filename in file_list:
                 file_path = self.extract_dir / filename
@@ -514,31 +541,20 @@ class RFBDataLoader:
         except Exception as e:
             logging.error("Erro ao processar tabela %s: %s", table_name, e)
             raise
-        finally:
-            if cursor:
-                cursor.close()
                 
     def verificar_tabela_existe(self, conexao: mysql.connector.MySQLConnection, table_name: str) -> bool:
         """Verifica se uma tabela existe no banco de dados."""
         cursor = None
         try:
-            db_name = os.getenv('DB_NAME')
-            if not db_name:
-                logging.warning("DB_NAME nào definido ao verificar existência de tabela")
-                db_cond = "DATABASE()"
-            else:
-                db_cond = f"'{db_name}'"
-
             cursor = conexao.cursor()
             cursor.execute(f"""
                 SELECT COUNT(*) 
                 FROM information_schema.tables 
-                WHERE table_schema = {db_cond} 
-                AND table_name = %s
-            """, (table_name,))
+                WHERE table_schema = DATABASE() 
+                AND table_name = '{table_name}'
+            """)
             resultado = cursor.fetchone()
-            return bool(resultado and resultado[0] > 0)
-        
+            return resultado[0] > 0
         except mysql_errors.Error as e:
             logging.error(f"Erro ao verificar existência da tabela {table_name}: {e}")
             return False
@@ -551,7 +567,7 @@ class RFBDataLoader:
                                  column_names: List[str]):
         try:
             # Configurações otimizadas para leitura CSV
-            dtype_spec = {col: 'string' for col in column_names}  # Ler tudo como string primeiro
+            dtype_spec = {col: str for col in column_names}   # Ler tudo como string primeiro
         
             # Ler arquivo em chunks para melhor performance
             chunk_size = 50000
@@ -570,7 +586,6 @@ class RFBDataLoader:
                 na_filter=True,
                 keep_default_na=False,
                 na_values=['', 'NULL', 'null'],
-                
             ):
                 chunk_number += 1
 
@@ -589,11 +604,10 @@ class RFBDataLoader:
                 if data:
                     self.batch_insert_data_optimized(conexao, table_name, data, column_names)
                     total_rows += len(data)
-
-                logging.info("Processadas %d linhas da tabela %s (chunk %d)", 
+                    logging.info("Processadas %d linhas da tabela %s (chunk %d)", 
                              total_rows, table_name, chunk_number + 1)
             
-                logging.info("Total de %d linhas processadas para tabela %s", total_rows, table_name)
+            logging.info("Total de %d linhas processadas para tabela %s", total_rows, table_name)
 
         except Exception as e:
             logging.error("Erro ao processar arquivo %s: %s", file_path, e)
@@ -615,6 +629,8 @@ class RFBDataLoader:
                 dtype_map[col] = 'Int32'
             elif any(keyword in col for keyword in ['data', 'date']):
                 dtype_map[col] = 'string'  # Será convertido para datetime
+            elif col == 'situacao_especial':
+                dtype_map[col] = 'string'
             else:
                 # Ler todo o resto inicialmente como string para permitir limpeza segura
                 dtype_map[col] = 'string'
@@ -629,7 +645,7 @@ class RFBDataLoader:
         return date_columns
 
     def apply_optimized_transformations(self, df: pd.DataFrame, column_names: List[str]) -> pd.DataFrame:
-        import re
+
 
         def clean_string_series(s: pd.Series) -> pd.Series:
             # Força string, remove aspas, NBSP e espaços
@@ -665,6 +681,10 @@ class RFBDataLoader:
                 continue
 
             try:
+                if col == 'situacao_especial':
+                    df[col] = clean_string_series(df[col])
+                    continue
+
                 if col == 'capital_social':
                     # Limpar e converter capital social
                     df[col] = clean_decimal_series(df[col])
@@ -677,7 +697,7 @@ class RFBDataLoader:
 
                 elif any(keyword in col for keyword in ['data', 'date']):
                     df[col] = clean_date_series(df[col])
-                    
+                   
                 else:
                     # Limpeza bsica para strings
                     df[col] = clean_string_series(df[col])
@@ -689,73 +709,66 @@ class RFBDataLoader:
         return df
 
     def convert_chunk_to_native_types(self, chunk: pd.DataFrame) -> List[Tuple]:
-        """Converte chunk do pandas para lista de tuplas com tipos nativos."""
-        data = []
-        for row in chunk.itertuples(index=False, name=None):
-            converted_row = tuple(self.data_processor.convert_to_native_types(value) for value in row)
-            data.append(converted_row)
+        """Converte chunk do pandas para lista de tuplas com tipos nativos usando vetorização quando possível."""
+        
+        # Mapeie a função de conversão para cada coluna do DataFrame
+        for col in chunk.columns:
+            # Isso aplica a conversão de forma mais eficiente do que iterar sobre itertuples
+            chunk[col] = chunk[col].apply(self.data_processor.convert_to_native_types)
+        
+        # Converta o DataFrame inteiro para uma lista de tuplas de uma vez
+        data = list(chunk.itertuples(index=False, name=None))
         return data
+
 
     def batch_insert_data_optimized(self, conexao: mysql.connector.MySQLConnection,
                                    table_name: str, data: List[Tuple],
-                                   column_names: List[str], attempt: int =1):
+                                   column_names: List[str]):
         """Insere dados em lotes com otimizações."""
         if not data:
             return
         
         cursor = None
-        max_attempts = 3 # Número máximo de tentativas
+
         try:
-            # Tentativas iterativas, reduzindo o tamanho do lote a cada tentativa
-            for current_attempt in range(1, max_attempts + 1):
-                try:
-                    cursor = conexao.cursor()
-                    columns = ', '.join(column_names)
-                    placeholders = ', '.join(['%s'] * len(column_names))
-                    insert_query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+            cursor = conexao.cursor()
+            columns = ', '.join(column_names)
+            placeholders = ', '.join(['%s'] * len(column_names))
             
-                    # calcula tamanho do lote para esta tentativa (mínimo 1)
-                    current_batch_size = max(1, Config.BATCH_SIZE // (2 ** (current_attempt - 1)))
+            # Use INSERT IGNORE para ignorar entradas duplicadas (como o código 0)
+            insert_query = f"INSERT IGNORE INTO {table_name} ({columns}) VALUES ({placeholders})"
+            
+            try:
+                # ... (restante do loop de inserção de lotes) ...
+                batch_size = min(Config.BATCH_SIZE, 10000)
+                total_inserted = 0
+                
+                for i in range(0, len(data), batch_size):
+                    batch = data[i:i + batch_size]
+                    cursor.executemany(insert_query, batch) # Usa INSERT IGNORE
+                    conexao.commit()
+                    total_inserted += len(batch)
+                    
+                    logging.info("Inserido lote de %d registros em %s (total: %d)", 
+                               len(batch), table_name, total_inserted)
+                
+            except mysql_errors.Error as e:
+                # ... (restante do tratamento de erro) ...
+                if cursor:
+                    conexao.rollback()
+                raise
+            finally:
+                if cursor:
+                    cursor.close()
+        except mysql_errors.Error as e:
+                # Lembre-se de remover a recursão problemática aqui
+                logging.error("Erro geral na inserção em lote para a tabela %s: %s", table_name, e)
+                raise
 
-                    total_inserted = 0
-                    # tenta inserir todo o conjunto em batches de current_batch_size
-                    for i in range(0, len(data), current_batch_size):
-                        batch = data[i:i + current_batch_size]
-                        cursor.executemany(insert_query, batch)
-                        conexao.commit()
-                        total_inserted += len(batch)
-                        logging.info(f"Inserido lote de {len(batch)} registros em {table_name} (total: {total_inserted})")
-
-                    # se chegou até aqui sem exceção, sucesso -> sair do loop de tentativa
-                    return
-
-                except mysql_errors.Error as e:
-                    # rollback da tentativa atual
-                    if conexao:
-                        conexao.rollback()
-                    logging.warning(f"Erro na tentativa {current_attempt} ao inserir dados em {table_name}: {e}")
-
-                    # fechar cursor da tentativa antes de nova tentativa
-                    if cursor:
-                        cursor.close()
-                        cursor = None
-
-                    # se atingiu o máximo de tentativas, re-levanta
-                    if current_attempt >= max_attempts:
-                        logging.error(f"Falha ao inserir dados em {table_name} após {max_attempts} tentativas: {e}")
-                        raise
-
-                    # caso contrario, aguarda e tenta novamente com lote menor
-                    logging.info("Tentando novamente com lote menor (tentativa %d)...", current_attempt + 1)
-                    time.sleep(Config.RETRY_DELAY)
-                   
-        finally:
-            if cursor:
-                cursor.close()
 
     def insert_in_smaller_batches(self, conexao: mysql.connector.MySQLConnection,
                                  table_name: str, data: List[Tuple],
-                                 column_names: List[str], cursor):
+                                 column_names: List[str]):
         """Insere dados em lotes menores em caso de erro."""
         cursor = None
 
@@ -794,8 +807,8 @@ class RFBDataLoader:
 
             additional_indexes = [
             'CREATE INDEX idx_estabelecimento_uf ON estabelecimento(uf)',
-            'CREATE INDEX idx_establecimento_municipio ON estabelecimento(municipio)',
-            'CREATE INDEX idx_establecimento_cnae ON estabelecimento(cnae_fiscal_principal)',
+            'CREATE INDEX idx_estabelecimento_municipio ON estabelecimento(municipio)',
+            'CREATE INDEX idx_estabelecimento_cnae ON estabelecimento(cnae_fiscal_principal)',
             'CREATE INDEX idx_empresa_natureza ON empresa(natureza_juridica)',
             'CREATE INDEX idx_socios_cpf ON socios(cpf_cnpj_socio)',
             ]
@@ -817,24 +830,38 @@ class RFBDataLoader:
         total_start = time.time()
 
         try:
-            logging.info("Iniciando processo de carga de dados da RFB")
+            #logging.info("Iniciando processo de carga de dados da RFB")
 
             # 1. Obter lista de arquivos
-            logging.info("Obtendo lista de arquivos...")
-            self.files = self.fetch_file_list()
+            #logging.info("Obtendo lista de arquivos...")
+            #self.files = self.fetch_file_list()
 
             # 2. Download dos arquivos
-            logging.info("Iniciando download dos arquivos...")
-            downloaded_files = self.download_files(self.files)
+            #logging.info("Iniciando download dos arquivos...")
+            #downloaded_files = self.download_files(self.files)
 
             # 3. Extrair arquivos
-            logging.info("Extraindo arquivos...")
-            self.file_processor.extract_files(downloaded_files, self.extract_dir)
+            #logging.info("Extraindo arquivos...")
+            #self.file_processor.extract_files(downloaded_files, self.extract_dir)
+        
+            conexao = self.db_manager.connect() 
+        
+            # Inicialize a variável com um valor seguro (dicionário vazio)
+            categorizado_files = {} 
+
+            try:
+                logging.info("Iniciando categorização dos arquivos...")
+                all_files = [f.name for f in self.extract_dir.iterdir() if f.is_file()]
+                categorizado_files = self.data_processor.categorize_files(all_files)
+                logging.info("Arquivos categorizados com sucesso.")
+                print(f"Arquivos categorizados: {categorizado_files}")
+
+            except Exception as e:
+                logging.error(f"Ocorreu um erro durante a categorização dos arquivos: {e}")
+                # Se der erro aqui, 'categorizado_files' permanece como {} (vazio)
 
             # 4. Listar e categorizar arquivos
             logging.info("Categorizar arquivos...")
-            all_files = [f.name for f in self.extract_dir.iterdir() if f.is_file()]
-            categorizado_files = self.data_processor.categorize_files(all_files)
                 
             # 5. Processar dados
             logging.info("Processando dados...")
@@ -859,7 +886,7 @@ class RFBDataLoader:
             total_time = time.time() - total_start
             logging.info("Processo de carga concluído em %.2f segundos", total_time)
             logging.info("Processo 100 %% finalizado")
-
+        
         except Exception as e:
             logging.error("Erro durante execução: %s", e)
             raise
@@ -869,8 +896,11 @@ class RFBDataLoader:
                 
 
 def main():
-    """Função principal."""
-    loader = RFBDataLoader('F:\\Repositorio\\00_Programacao\\08-DADOS_RFB\\DADOS_RFB\\code')
+     # Isso gera a string correta automaticamente:
+    caminho_base = os.path.dirname(os.path.abspath(__file__)) 
+    
+    # E é passado como string para a classe:
+    loader = RFBDataLoader(caminho_base)
     loader.run()
 
 if __name__ == "__main__":

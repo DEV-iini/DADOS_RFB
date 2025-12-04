@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Busca CNPJ Barueri</title>
+    <!-- CORRIGIDO: Adicionado https:// -->
+    <link href="cdn.jsdelivr.net" rel="stylesheet">
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>Consultar CNPJ em Barueri</h1>
+        
+        <div class="card p-3 mb-4">
+            <form id="formBusca">
+                <div class="input-group">
+                    <!-- Removido maxlength para permitir formatação visual -->
+                    <input type="text" class="form-control" id="cnpjInput" placeholder="Digite o CNPJ (com ou sem formatação)" required>
+                    <button type="submit" class="btn btn-primary">Buscar</button>
+                </div>
+            </form>
+        </div>
+
+        <div id="resultado">
+            <!-- Resultados aparecem aqui -->
+        </div>
+    </div>
+
+    <script>
+    // FUNÇÕES DE FORMATAÇÃO ROBUSTAS (Tratam NULL/undefined)
+    function getValueOrDefault(value, defaultValue = 'N/A') {
+        return value !== null && value !== undefined && value !== '' ? value : defaultValue;
+    }
+
+    function formatarCNPJ(cnpj) {
+        cnpj = getValueOrDefault(cnpj, '');
+        if (cnpj === 'N/A' || cnpj === '') return 'N/A';
+        return cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+    }
+    
+    // FUNÇÃO formatarData ATUALIZADA E CORRIGIDA
+    function formatarData(dataISO) {
+        if (!dataISO || dataISO === '0000-00-00') {
+            return 'N/A';
+        }
+        
+        const partes = dataISO.split('-');
+        if (partes.length !== 3) {
+            return 'N/A';
+        }
+        
+        // CORREÇÃO APLICADA AQUI: Usando partes[index]
+        const ano = parseInt(partes[0]);
+        const mes = parseInt(partes[1]) - 1; // Mês em JS é 0-based
+        const dia = parseInt(partes[2]);
+
+        const dataObj = new Date(ano, mes, dia);
+
+        // Verificação adicional para garantir que a data criada é válida
+        if (isNaN(dataObj.getTime())) {
+            return 'N/A'; 
+        }
+
+        return dataObj.toLocaleDateString('pt-BR');
+    }
+
+    function formatarCapitalSocial(valor) {
+        if (!valor) return 'R$ 0,00';
+        return parseFloat(valor).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    }
+
+    // LÓGICA DE BUSCA (MANTIDA IGUAL)
+    document.getElementById('cnpjInput').addEventListener('input', function (e) {
+        var value = e.target.value;
+        value = value.replace(/\D/g, "");
+        if (value.length > 2) value = value.replace(/^(\d{2})/, '$1.');
+        if (value.length > 5) value = value.replace(/^(\d{2})\.(\d{3})/, '$1.$2.');
+        if (value.length > 8) value = value.replace(/^(\d{2})\.(\d{3})\.(\d{3})/, '$1.$2.$3/');
+        if (value.length > 12) value = value.replace(/^(\d{2})\.(\d{3})\.(\d{3})\/(\d{4})/, '$1.$2.$3/$4-');
+        e.target.value = value.substring(0, 18);
+    });
+
+    document.getElementById('formBusca').addEventListener('submit', function(event) {
+        event.preventDefault();
+        let cnpj = document.getElementById('cnpjInput').value;
+        const resultadoDiv = document.getElementById('resultado');
+        cnpj = cnpj.replace(/\D/g, "");
+        if (cnpj.length !== 14) {
+            resultadoDiv.innerHTML = `<div class="alert alert-warning">Por favor, insira um CNPJ válido de 14 dígitos.</div>`;
+            return;
+        }
+        resultadoDiv.innerHTML = `<div class="alert alert-info">Buscando...</div>`;
+        fetch(`/buscar_cnpj?cnpj=${cnpj}`)
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(errorData => {
+                        throw new Error(errorData.erro || errorData.mensagem || 'Erro desconhecido no servidor.');
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                resultadoDiv.innerHTML = renderizarResultado(data);
+            })
+            .catch(error => {
+                console.error("Fetch error:", error);
+                resultadoDiv.innerHTML = `<div class="alert alert-danger">Erro na busca: ${error.message || error}</div>`;
+            });
+    });
+
+    // FUNÇÃO RENDERIZAR RESULTADO (Usa getValueOrDefault em tudo)
+    function renderizarResultado(empresa) {
+        const cnpjFormatado = formatarCNPJ(empresa.cnpj_completo);
+        const dataInicio = formatarData(empresa.data_inicio_atividade);
+        const dataSituacao = formatarData(empresa.data_situacao_cadastral);
+
+        return `
+        <div class="card border-success shadow-lg">
+            <div class="card-header bg-success text-white">
+                ${getValueOrDefault(empresa.razao_social)}
+            </div>
+            <div class="card-body">
+                <h5 class="card-title">${getValueOrDefault(empresa.nome_fantasia, 'Sem Nome Fantasia')}</h5>
+                
+                <ul class="list-group list-group-flush mt-3">
+                    <li class="list-group-item"><strong>CNPJ:</strong> ${cnpjFormatado}</li>
+                    <li class="list-group-item"><strong>Natureza Jurídica:</strong> ${getValueOrDefault(empresa.nome_natureza_juridica)} (${getValueOrDefault(empresa.natureza_juridica)})</li>
+                    <li class="list-group-item"><strong>Capital Social:</strong> ${formatarCapitalSocial(empresa.capital_social)}</li>
+                    <li class="list-group-item"><strong>Porte Empresa (Cód):</strong> ${getValueOrDefault(empresa.porte_empresa)}</li>
+                    <li class="list-group-item"><strong>Responsável (Cód):</strong> ${getValueOrDefault(empresa.qualificacao_responsavel)}</li>
+                </ul>
+
+                <h5 class="mt-4">Situação e Atividade</h5>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item"><strong>Situação Cadastral (Cód):</strong> ${getValueOrDefault(empresa.situacao_cadastral)} (Motivo: ${getValueOrDefault(empresa.motivo_situacao_cadastral)})</li>
+                    <li class="list-group-item"><strong>Data Situação:</strong> ${dataSituacao}</li>
+                    <li class="list-group-item"><strong>Data Início Atividade:</strong> ${dataInicio}</li>
+                    <li class="list-group-item"><strong>CNAE Principal:</strong> ${getValueOrDefault(empresa.nome_cnae_principal)} (${getValueOrDefault(empresa.cnae_fiscal_principal)})</li>
+                </ul>
+
+                <h5 class="mt-4">Endereço e Contato</h5>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item">
+                        ${getValueOrDefault(empresa.tipo_logradouro)} ${getValueOrDefault(empresa.logradouro)}, ${getValueOrDefault(empresa.numero)} 
+                        ${empresa.complemento ? ' - ' + empresa.complemento : ''}
+                        - Bairro: ${getValueOrDefault(empresa.bairro)} - CEP: ${getValueOrDefault(empresa.cep)}
+                    </li>
+                    <li class="list-group-item"><strong>Telefone:</strong> (${getValueOrDefault(empresa.ddd_1)}) ${getValueOrDefault(empresa.telefone_1)}</li>
+                    <li class="list-group-item"><strong>Email:</strong> ${getValueOrDefault(empresa.correio_eletronico)}</li>
+                </ul>
+            </div>
+        </div>
+        `;
+    }
+</script>
+
+</body>
+</html>
